@@ -1,0 +1,1277 @@
+from flask import Flask, render_template_string, request, redirect, url_for, flash, send_from_directory, jsonify
+from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
+from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.utils import secure_filename
+import sqlite3
+import os
+
+app = Flask(__name__)
+app.secret_key = 'CRSZ_ULTIMATE_EFFECTS_2026_KEY'
+UPLOAD_FOLDER = 'static/uploads'
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+DB_FILE = 'crszhub.db'
+
+def get_db_connection():
+    conn = sqlite3.connect(DB_FILE, timeout=30.0)
+    conn.row_factory = sqlite3.Row
+    conn.execute('PRAGMA journal_mode=WAL;')
+    return conn
+
+def init_db():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL,
+            is_admin BOOLEAN DEFAULT 0
+        )
+    ''')
+    
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS settings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            site_title TEXT,
+            bio TEXT,
+            avatar TEXT,
+            bg_image TEXT,
+            accent_color TEXT,
+            bg_music TEXT,
+            bg_type TEXT DEFAULT 'image',
+            avatar_effect TEXT DEFAULT 'neon_pulse',
+            name_effect TEXT DEFAULT 'rainbow_glow',
+            instagram TEXT,
+            tiktok TEXT,
+            youtube TEXT,
+            telegram TEXT,
+            discord TEXT,
+            views INTEGER DEFAULT 0
+        )
+    ''')
+
+    cols = ['instagram', 'tiktok', 'youtube', 'telegram', 'discord', 'views']
+    for col in cols:
+        try:
+            if col == 'views':
+                cursor.execute(f"ALTER TABLE settings ADD COLUMN {col} INTEGER DEFAULT 0")
+            else:
+                cursor.execute(f"ALTER TABLE settings ADD COLUMN {col} TEXT")
+        except: pass
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS projects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            category TEXT NOT NULL,
+            description TEXT NOT NULL,
+            link TEXT,
+            image TEXT,
+            video_url TEXT,
+            file_path TEXT,
+            download_enabled BOOLEAN DEFAULT 1,
+            rating_sum INTEGER DEFAULT 0,
+            rating_count INTEGER DEFAULT 0,
+            avg_rating REAL DEFAULT 0.0
+        )
+    ''')
+
+    project_cols = [
+        ('video_url', 'TEXT'),
+        ('file_path', 'TEXT'),
+        ('download_enabled', 'BOOLEAN DEFAULT 1'),
+        ('rating_sum', 'INTEGER DEFAULT 0'),
+        ('rating_count', 'INTEGER DEFAULT 0'),
+        ('avg_rating', 'REAL DEFAULT 0.0')
+    ]
+    for c_name, c_type in project_cols:
+        try:
+            cursor.execute(f"ALTER TABLE projects ADD COLUMN {c_name} {c_type}")
+        except: pass
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS comments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER,
+            text TEXT NOT NULL
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS music (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            artist TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            cover_image TEXT
+        )
+    ''')
+    try:
+        cursor.execute("ALTER TABLE music ADD COLUMN cover_image TEXT")
+    except: pass
+
+    cursor.execute('SELECT * FROM users WHERE username = ?', ('Crew',))
+    if not cursor.fetchone():
+        hashed_pw = generate_password_hash('crewbaba31')
+        cursor.execute('INSERT INTO users (username, password, is_admin) VALUES (?, ?, 1)', ('Crew', hashed_pw))
+
+    cursor.execute('SELECT * FROM settings WHERE id = 1')
+    if not cursor.fetchone():
+        cursor.execute('''
+            INSERT INTO settings (id, site_title, bio, avatar, bg_image, accent_color, bg_music, bg_type, avatar_effect, name_effect, views)
+            VALUES (1, 'CRSZ Studio & Hub', 'Geliştirdiğim oyun scriptleri, web siteleri ve projelerim burada yer alıyor.', 
+                    'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?q=80&w=300', 
+                    'https://images.unsplash.com/photo-1550684848-fac1c5b4e853?q=80&w=1920', '#38bdf8', '', 'image', 'neon_pulse', 'rainbow_glow', 0)
+        ''')
+
+    conn.commit()
+    conn.close()
+
+init_db()
+
+login_manager = LoginManager()
+login_manager.init_app(app)
+login_manager.login_view = 'login'
+
+class User(UserMixin):
+    def __init__(self, id, username, is_admin):
+        self.id = id
+        self.username = username
+        self.is_admin = is_admin
+
+@login_manager.user_loader
+def load_user(user_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT id, username, is_admin FROM users WHERE id = ?', (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        return User(id=row['id'], username=row['username'], is_admin=bool(row['is_admin']))
+    return None
+
+def get_settings():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT site_title, bio, avatar, bg_image, accent_color, bg_music, bg_type, avatar_effect, name_effect, instagram, tiktok, youtube, telegram, discord, views FROM settings WHERE id = 1')
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        return {
+            'site_title': row['site_title'] or 'CRSZ Studio',
+            'bio': row['bio'] or '',
+            'avatar': row['avatar'] or '',
+            'bg_image': row['bg_image'] or 'https://images.unsplash.com/photo-1550684848-fac1c5b4e853?q=80&w=1920',
+            'accent_color': row['accent_color'] or '#38bdf8',
+            'bg_music': row['bg_music'] or '',
+            'bg_type': row['bg_type'] or 'image',
+            'avatar_effect': row['avatar_effect'] or 'neon_pulse',
+            'name_effect': row['name_effect'] or 'rainbow_glow',
+            'instagram': row['instagram'] or '',
+            'tiktok': row['tiktok'] or '',
+            'youtube': row['youtube'] or '',
+            'telegram': row['telegram'] or '',
+            'discord': row['discord'] or '',
+            'views': row['views'] or 0
+        }
+    return {
+        'site_title': 'CRSZ Studio', 'bio': '', 'avatar': '', 
+        'bg_image': 'https://images.unsplash.com/photo-1550684848-fac1c5b4e853?q=80&w=1920', 
+        'accent_color': '#38bdf8', 'bg_music': '', 'bg_type': 'image',
+        'avatar_effect': 'neon_pulse', 'name_effect': 'rainbow_glow',
+        'instagram': '', 'tiktok': '', 'youtube': '', 'telegram': '', 'discord': '', 'views': 0
+    }
+
+BASE_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ settings.site_title }}</title>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root { --accent: {{ settings.accent_color }}; }
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Plus Jakarta Sans', sans-serif; scroll-behavior: smooth; }
+        body { background-color: #030712; color: #f3f4f6; min-height: 100vh; overflow-x: hidden; position: relative; }
+        .bg-container { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: -10; overflow: hidden; pointer-events: none; background: #030712; }
+        .bg-container img, .bg-container video { width: 100%; height: 100%; object-fit: cover; }
+        .bg-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(3, 7, 18, 0.82); }
+        
+        nav { display: flex; justify-content: space-between; align-items: center; padding: 14px 4%; background: rgba(3, 7, 18, 0.85); backdrop-filter: blur(20px); border-bottom: 1px solid rgba(255,255,255,0.08); position: sticky; top: 0; z-index: 100; gap: 10px; flex-wrap: wrap; }
+        .logo { font-size: 1.05rem; font-weight: 800; color: var(--accent); text-decoration: none; display: flex; align-items: center; gap: 6px; white-space: nowrap; max-width: 55%; overflow: hidden; text-overflow: ellipsis; }
+        .nav-links { display: flex; gap: 10px; align-items: center; font-size: 0.82rem; flex-wrap: wrap; }
+        .nav-links a { color: #94a3b8; text-decoration: none; font-weight: 600; transition: 0.3s; white-space: nowrap; }
+        .nav-links a:hover { color: var(--accent); }
+        .btn-admin { background: var(--accent); color: #030712; padding: 5px 10px; border-radius: 6px; font-weight: 700; }
+        
+        .container { max-width: 850px; margin: 0 auto; padding: 40px 20px; position: relative; z-index: 1; }
+        .profile-card { background: rgba(17, 24, 39, 0.65); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 28px; padding: 40px 20px; text-align: center; backdrop-filter: blur(25px); box-shadow: 0 25px 50px rgba(0,0,0,0.5); margin-bottom: 30px; }
+        
+        .avatar-box { width: 120px; height: 120px; border-radius: 50%; margin: 0 auto 20px auto; position: relative; display: flex; align-items: center; justify-content: center; }
+        .avatar-box img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; position: relative; z-index: 2; }
+        .eff-avatar-neon_pulse { border: 3px solid var(--accent); box-shadow: 0 0 25px var(--accent); }
+        .eff-avatar-rainbow { border: 3px solid transparent; background: linear-gradient(45deg, #ff0000, #ff7300, #fffb00, #48ff00, #00ffd5, #002bff, #7a00ff, #ff00c8, #ff0000); background-size: 400%; animation: glowing 20s linear infinite; }
+        .eff-avatar-rainbow img { width: calc(100% - 6px); height: calc(100% - 6px); }
+        .eff-avatar-cyberpunk { border: 3px dashed var(--accent); box-shadow: 0 0 15px var(--accent); border-radius: 20px; }
+        .eff-avatar-cyberpunk img { border-radius: 17px; }
+        @keyframes glowing { 0% { background-position: 0 0; } 50% { background-position: 400% 0; } 100% { background-position: 0 0; } }
+
+        .profile-card h1 { font-size: 2.2rem; font-weight: 800; margin-bottom: 10px; display: inline-block; }
+        .eff-name-rainbow_glow { background: linear-gradient(90deg, var(--accent), #fff, var(--accent)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; animation: textShine 3s infinite; }
+        @keyframes textShine { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
+        .eff-name-neon { color: #fff; text-shadow: 0 0 10px var(--accent), 0 0 20px var(--accent); }
+        .eff-name-normal { color: #fff; }
+        
+        .profile-bio { color: #94a3b8; font-size: 0.95rem; margin-bottom: 20px; }
+
+        .profile-stats { display: inline-flex; align-items: center; gap: 8px; background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.08); padding: 6px 14px; border-radius: 20px; font-size: 0.8rem; color: #cbd5e1; margin-bottom: 20px; }
+        .profile-stats i { color: var(--accent); }
+
+        .social-links { display: flex; justify-content: center; gap: 12px; margin-top: 5px; flex-wrap: wrap; }
+        .social-btn { width: 40px; height: 40px; border-radius: 50%; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); color: #fff; display: flex; align-items: center; justify-content: center; text-decoration: none; font-size: 1rem; transition: 0.3s; }
+        .social-btn:hover { background: var(--accent); color: #030712; border-color: var(--accent); transform: translateY(-3px); }
+
+        .guns-music-widget { background: rgba(17, 24, 39, 0.75); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 18px; padding: 14px 20px; display: flex; align-items: center; justify-content: space-between; gap: 15px; backdrop-filter: blur(20px); margin-bottom: 35px; }
+        .music-info { display: flex; align-items: center; gap: 14px; flex: 1; min-width: 0; overflow: hidden; }
+        .music-thumb { width: 45px; height: 45px; border-radius: 10px; background: rgba(56,189,248,0.1); display: flex; align-items: center; justify-content: center; color: var(--accent); font-size: 1.2rem; border: 1px solid rgba(56,189,248,0.2); flex-shrink: 0; overflow: hidden; }
+        .music-thumb img { width: 100%; height: 100%; object-fit: cover; }
+        .music-text { flex: 1; min-width: 0; overflow: hidden; }
+        .music-text .track-name { font-size: 0.9rem; font-weight: 700; color: white; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .music-text .artist-name { font-size: 0.75rem; color: #94a3b8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .music-controls { display: flex; align-items: center; gap: 15px; flex-shrink: 0; }
+        .ctrl-btn { background: none; border: none; color: white; font-size: 1.1rem; cursor: pointer; transition: 0.2s; }
+        .ctrl-btn:hover { color: var(--accent); }
+        .track-select-dropdown { background: rgba(3, 7, 18, 0.6); border: 1px solid rgba(255,255,255,0.1); color: #94a3b8; padding: 6px 10px; border-radius: 8px; font-size: 0.78rem; outline: none; cursor: pointer; max-width: 150px; }
+        
+        .section-title { font-size: 1.3rem; font-weight: 800; margin-bottom: 20px; display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+        .hint-badge { font-size: 0.75rem; color: var(--accent); background: rgba(56,189,248,0.1); padding: 4px 10px; border-radius: 20px; border: 1px solid rgba(56,189,248,0.3); font-weight: 600; }
+        
+        .projects-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 20px; }
+        .project-card { background: rgba(17, 24, 39, 0.7); border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; overflow: hidden; backdrop-filter: blur(15px); transition: 0.3s; display: flex; flex-direction: column; cursor: pointer; user-select: none; }
+        .project-card:hover { transform: translateY(-5px); border-color: var(--accent); box-shadow: 0 0 20px rgba(56,189,248,0.2); }
+        
+        .project-img-wrapper { width: 100%; height: 160px; background: rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; overflow: hidden; }
+        .project-img { width: 100%; height: 100%; object-fit: cover; object-position: center; }
+
+        .project-body { padding: 18px; display: flex; flex-direction: column; flex: 1; }
+        .project-tag { font-size: 0.7rem; color: var(--accent); font-weight: 700; text-transform: uppercase; margin-bottom: 6px; }
+        .project-name { font-size: 1.05rem; font-weight: 700; margin-bottom: 8px; }
+        .project-desc { font-size: 0.82rem; color: #94a3b8; line-height: 1.5; margin-bottom: 15px; flex: 1; }
+        
+        .incele-btn { display: flex; align-items: center; justify-content: center; width: 100%; padding: 10px; background: rgba(56, 189, 248, 0.12); border: 1px solid rgba(56, 189, 248, 0.3); color: var(--accent); font-weight: 700; border-radius: 8px; text-decoration: none; font-size: 0.82rem; transition: 0.3s; margin-top: auto; }
+        .incele-btn:hover { background: var(--accent); color: #030712; }
+        
+        /* Tam Ekran App-Store Tarzı Detay Sayfası / Modalı */
+        .modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: #030712; z-index: 9999; overflow-y: auto; flex-direction: column; }
+        .store-header-banner { width: 100%; height: 220px; background: rgba(0,0,0,0.5); position: relative; overflow: hidden; display: flex; align-items: flex-end; }
+        .store-header-banner img { width: 100%; height: 100%; object-fit: cover; position: absolute; top: 0; left: 0; z-index: 1; }
+        .store-header-banner::after { content: ''; position: absolute; bottom: 0; left: 0; width: 100%; height: 100%; background: linear-gradient(to top, #030712, transparent); z-index: 2; }
+        .store-close-floating { position: fixed; top: 15px; right: 20px; z-index: 10001; background: rgba(0,0,0,0.6); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.2); color: #fff; width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 20px; cursor: pointer; transition: 0.2s; }
+        .store-close-floating:hover { background: var(--accent); color: #030712; }
+
+        .store-container { max-width: 750px; margin: 0 auto; padding: 20px; width: 100%; position: relative; z-index: 3; margin-top: -40px; }
+        .store-app-info { display: flex; gap: 16px; align-items: center; margin-bottom: 25px; background: rgba(17, 24, 39, 0.8); border: 1px solid rgba(255,255,255,0.08); padding: 16px; border-radius: 20px; backdrop-filter: blur(20px); }
+        .store-app-icon { width: 85px; height: 85px; border-radius: 16px; object-fit: cover; border: 1px solid rgba(255,255,255,0.1); flex-shrink: 0; }
+        .store-app-details h2 { font-size: 1.4rem; font-weight: 800; color: #fff; margin-bottom: 4px; }
+        .store-app-details p { font-size: 0.85rem; color: #94a3b8; line-height: 1.4; }
+
+        .store-metrics { display: flex; justify-content: space-around; background: rgba(17, 24, 39, 0.6); border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; padding: 14px; margin-bottom: 25px; text-align: center; }
+        .metric-item span { display: block; font-size: 0.7rem; color: #94a3b8; text-transform: uppercase; font-weight: 700; margin-bottom: 2px; }
+        .metric-item strong { font-size: 0.95px; color: #fff; font-weight: 700; }
+
+        .modal-video-container { width: 100%; border-radius: 14px; overflow: hidden; margin-bottom: 25px; background: #000; border: 1px solid rgba(255,255,255,0.08); }
+        .preview-video { width: 100%; max-height: 280px; object-fit: cover; display: block; }
+        
+        .download-section { margin-bottom: 25px; display: flex; flex-direction: column; gap: 10px; }
+        .btn-download { display: block; width: 100%; padding: 14px; text-align: center; border-radius: 12px; font-weight: 700; text-decoration: none; transition: 0.2s; font-size: 0.95rem; }
+        .btn-download.active { background: #22c55e; color: #fff; }
+        .btn-download.active:hover { background: #16a34a; }
+        .btn-download.external { background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4); color: var(--accent); }
+        .btn-download.external:hover { background: var(--accent); color: #030712; }
+        .btn-download.disabled { background: #334155; color: #94a3b8; border: none; cursor: not-allowed; }
+
+        .rating-box { background: rgba(17, 24, 39, 0.6); border: 1px solid rgba(255,255,255,0.08); padding: 16px; border-radius: 16px; margin-bottom: 25px; text-align: center; backdrop-filter: blur(15px); }
+        .stars { display: flex; justify-content: center; gap: 8px; margin-top: 8px; }
+        .stars span { font-size: 28px; cursor: pointer; color: #fbbf24; transition: transform 0.1s; }
+        .stars span:hover { transform: scale(1.25); }
+
+        .comments-box { background: rgba(17, 24, 39, 0.6); border: 1px solid rgba(255,255,255,0.08); padding: 20px; border-radius: 16px; margin-bottom: 40px; backdrop-filter: blur(15px); }
+        .comments-box h3 { font-size: 1rem; margin-bottom: 12px; color: #fff; }
+        .comment-list { max-height: 150px; overflow-y: auto; background: rgba(0,0,0,0.3); padding: 12px; border-radius: 10px; margin-bottom: 12px; font-size: 0.85rem; border: 1px solid rgba(255,255,255,0.05); }
+        .comment-input-group { display: flex; gap: 8px; }
+        .comment-input-group input { flex: 1; background: #030712; border: 1px solid rgba(255,255,255,0.1); padding: 10px 12px; color: #fff; border-radius: 10px; font-size: 0.88rem; outline: none; }
+        .comment-input-group input:focus { border-color: var(--accent); }
+        .comment-input-group button { background: var(--accent); border: none; color: #030712; padding: 0 18px; border-radius: 10px; cursor: pointer; font-weight: 700; }
+
+        .admin-box { background: rgba(17, 24, 39, 0.85); border: 1px solid rgba(255,255,255,0.1); border-radius: 20px; padding: 25px; backdrop-filter: blur(20px); max-width: 800px; margin: 30px auto; }
+        .admin-box h2 { font-size: 1.3rem; color: var(--accent); margin-bottom: 15px; display: flex; align-items: center; gap: 10px; }
+        .admin-card { background: rgba(3, 7, 18, 0.5); border: 1px solid rgba(255,255,255,0.06); border-radius: 14px; padding: 20px; margin-bottom: 20px; }
+        .admin-card h3 { font-size: 0.95rem; color: #fff; margin-bottom: 15px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 8px; }
+        
+        .form-group { margin-bottom: 14px; }
+        .form-group label { display: block; font-size: 0.78rem; font-weight: 600; color: #94a3b8; margin-bottom: 5px; }
+        .form-input { width: 100%; background: rgba(3, 7, 18, 0.7); border: 1px solid rgba(255,255,255,0.1); padding: 9px 12px; border-radius: 8px; color: white; font-size: 0.85rem; outline: none; }
+        .form-input:focus { border-color: var(--accent); }
+        .btn-main { background: var(--accent); color: #030712; border: none; padding: 10px; border-radius: 8px; font-weight: 700; width: 100%; cursor: pointer; transition: 0.3s; margin-top: 5px; }
+        .btn-main:hover { opacity: 0.9; }
+        
+        .admin-table { width: 100%; margin-top: 10px; border-collapse: collapse; font-size: 0.78rem; table-layout: fixed; }
+        .admin-table th, .admin-table td { padding: 10px 6px; border-bottom: 1px solid rgba(255,255,255,0.08); text-align: left; word-wrap: break-word; }
+        .admin-table th { color: var(--accent); }
+        .admin-table th:nth-child(3), .admin-table td:nth-child(3) { width: 130px; text-align: center; }
+        .action-btns { display: flex; gap: 6px; justify-content: center; align-items: center; }
+        .btn-del { background: rgba(239, 68, 68, 0.1); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3); padding: 5px 10px; border-radius: 6px; text-decoration: none; font-weight: 600; white-space: nowrap; font-size: 0.75rem; display: inline-block; }
+        .btn-edit { background: rgba(56, 189, 248, 0.1); color: var(--accent); border: 1px solid rgba(56, 189, 248, 0.3); padding: 5px 10px; border-radius: 6px; text-decoration: none; font-weight: 600; white-space: nowrap; font-size: 0.75rem; display: inline-block; }
+    </style>
+</head>
+<body>
+    <div class="bg-container">
+        {% if settings.bg_type == 'video' %}
+            <video autoplay muted loop playsinline><source src="{{ settings.bg_image }}" type="video/mp4"></video>
+        {% else %}
+            <img src="{{ settings.bg_image }}" alt="Arka Plan">
+        {% endif %}
+        <div class="bg-overlay"></div>
+    </div>
+"""
+
+@app.route('/')
+def index():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute('UPDATE settings SET views = views + 1 WHERE id = 1')
+    conn.commit()
+
+    cursor.execute('SELECT site_title, bio, avatar, bg_image, accent_color, bg_music, bg_type, avatar_effect, name_effect, instagram, tiktok, youtube, telegram, discord, views FROM settings WHERE id = 1')
+    row = cursor.fetchone()
+    
+    settings = {
+        'site_title': row['site_title'] or 'CRSZ Studio',
+        'bio': row['bio'] or '',
+        'avatar': row['avatar'] or '',
+        'bg_image': row['bg_image'] or 'https://images.unsplash.com/photo-1550684848-fac1c5b4e853?q=80&w=1920',
+        'accent_color': row['accent_color'] or '#38bdf8',
+        'bg_music': row['bg_music'] or '',
+        'bg_type': row['bg_type'] or 'image',
+        'avatar_effect': row['avatar_effect'] or 'neon_pulse',
+        'name_effect': row['name_effect'] or 'rainbow_glow',
+        'instagram': row['instagram'] or '',
+        'tiktok': row['tiktok'] or '',
+        'youtube': row['youtube'] or '',
+        'telegram': row['telegram'] or '',
+        'discord': row['discord'] or '',
+        'views': row['views'] or 0
+    }
+    
+    cursor.execute('SELECT id, title, category, description, link, image, video_url, file_path, download_enabled, avg_rating, rating_count FROM projects')
+    projects = [dict(r) for r in cursor.fetchall()]
+
+    cursor.execute('SELECT id, title, artist, file_path, cover_image FROM music')
+    music_list = [dict(r) for r in cursor.fetchall()]
+
+    conn.close()
+
+    template = BASE_TEMPLATE + """
+    <nav>
+        <a href="/" class="logo"><i class="fa-solid fa-fire"></i> {{ settings.site_title }}</a>
+        <div class="nav-links">
+            <a href="/">Ana Sayfa</a>
+            {% if current_user.is_authenticated %}
+                {% if current_user.is_admin %}
+                    <a href="/admin" class="btn-admin"><i class="fa-solid fa-gear"></i> Admin Panel</a>
+                {% endif %}
+                <a href="/logout" style="color: #ef4444;"><i class="fa-solid fa-right-from-bracket"></i> Çıkış</a>
+            {% else %}
+                <a href="/login"><i class="fa-solid fa-lock"></i> Giriş Yap</a>
+                <a href="/register" style="color: var(--accent);">Kayıt Ol</a>
+            {% endif %}
+        </div>
+    </nav>
+
+    <div class="container">
+        <div class="profile-card">
+            <div class="avatar-box eff-avatar-{{ settings.avatar_effect }}">
+                <img src="{{ settings.avatar }}" alt="Avatar">
+            </div>
+            <h1 class="eff-name-{{ settings.name_effect }}">{{ settings.site_title }}</h1>
+            <p class="profile-bio">{{ settings.bio }}</p>
+            
+            <div class="profile-stats">
+                <i class="fa-solid fa-eye"></i> Toplam Görüntülenme: <strong>{{ settings.views }}</strong>
+            </div>
+
+            <div class="social-links">
+                {% if settings.instagram %}
+                    <a href="{{ settings.instagram }}" target="_blank" class="social-btn"><i class="fa-brands fa-instagram"></i></a>
+                {% endif %}
+                {% if settings.tiktok %}
+                    <a href="{{ settings.tiktok }}" target="_blank" class="social-btn"><i class="fa-brands fa-tiktok"></i></a>
+                {% endif %}
+                {% if settings.youtube %}
+                    <a href="{{ settings.youtube }}" target="_blank" class="social-btn"><i class="fa-brands fa-youtube"></i></a>
+                {% endif %}
+                {% if settings.telegram %}
+                    <a href="{{ settings.telegram }}" target="_blank" class="social-btn"><i class="fa-brands fa-telegram"></i></a>
+                {% endif %}
+                {% if settings.discord %}
+                    <a href="{{ settings.discord }}" target="_blank" class="social-btn"><i class="fa-brands fa-discord"></i></a>
+                {% endif %}
+            </div>
+        </div>
+
+        {% if music_list %}
+        <div class="guns-music-widget">
+            <div class="music-info">
+                <div class="music-thumb" id="currentThumbContainer">
+                    <i class="fa-solid fa-music" id="defaultMusicIcon"></i>
+                </div>
+                <div class="music-text">
+                    <div class="track-name" id="currentTrackTitle">Müzik Yükleniyor...</div>
+                    <div class="artist-name" id="currentArtistName">CRSZ Studio</div>
+                </div>
+            </div>
+            <div class="music-controls">
+                <button class="ctrl-btn" id="playPauseBtn" onclick="togglePlay()"><i class="fa-solid fa-play" id="playIcon"></i></button>
+                <select class="track-select-dropdown" id="trackSelector" onchange="switchTrack()">
+                    {% for track in music_list %}
+                        <option value="/uploads/{{ track.file_path }}" data-title="{{ track.title }}" data-artist="{{ track.artist }}" data-cover="{% if track.cover_image %}/uploads/{{ track.cover_image }}{% endif %}">
+                            {{ track.title }} - {{ track.artist }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <audio id="audioPlayer" loop></audio>
+        </div>
+        {% endif %}
+
+        <div class="section-title">
+            <span><i class="fa-solid fa-code" style="color: var(--accent);"></i> Projelerim</span>
+            <span class="hint-badge">⚡ Detay için Çift Tıkla</span>
+        </div>
+        
+        <div class="projects-grid">
+            {% for p in projects %}
+                <!-- Proje Kartı -->
+                <div class="project-card" ondblclick="openModal('{{ p.id }}')">
+                    {% if p.image %}
+                        <div class="project-img-wrapper">
+                            <img src="{{ p.image }}" class="project-img" alt="Project">
+                        </div>
+                    {% endif %}
+                    <div class="project-body">
+                        <div class="project-tag">{{ p.category }}</div>
+                        <div class="project-name">{{ p.title }}</div>
+                        <div class="project-desc">{{ p.description }}</div>
+                        
+                        <a href="{{ p.link or '#' }}" target="_blank" class="incele-btn" onclick="event.stopPropagation()">
+                            İncele <i class="fa-solid fa-arrow-up-right-from-square" style="margin-left: 6px;"></i>
+                        </a>
+                    </div>
+                </div>
+
+                <!-- Tam Ekran App Store Tarzı Detay Sayfası / Modalı -->
+                <div class="modal-overlay" id="modal-{{ p.id }}">
+                    <div class="store-close-floating" onclick="closeModal('{{ p.id }}')">&times;</div>
+                    
+                    <div class="store-header-banner">
+                        {% if p.image %}
+                            <img src="{{ p.image }}" alt="Banner">
+                        {% endif %}
+                    </div>
+
+                    <div class="store-container" onclick="event.stopPropagation()">
+                        <div class="store-app-info">
+                            {% if p.image %}
+                                <img src="{{ p.image }}" class="store-app-icon" alt="Icon">
+                            {% endif %}
+                            <div class="store-app-details">
+                                <h2>{{ p.title }}</h2>
+                                <p>{{ p.category }}</p>
+                            </div>
+                        </div>
+
+                        <div class="store-metrics">
+                            <div class="metric-item">
+                                <span>Puanlama</span>
+                                <strong>{{ p.avg_rating | default(0) }} / 5</strong>
+                            </div>
+                            <div class="metric-item">
+                                <span>Toplam Oy</span>
+                                <strong>{{ p.rating_count | default(0) }}</strong>
+                            </div>
+                            <div class="metric-item">
+                                <span>Kategori</span>
+                                <strong>{{ p.category }}</strong>
+                            </div>
+                        </div>
+
+                        <!-- Önizleme Videosu -->
+                        {% if p.video_url %}
+                        <div class="modal-video-container">
+                            <video controls src="{{ p.video_url }}" class="preview-video"></video>
+                        </div>
+                        {% endif %}
+
+                        <p style="font-size: 0.9rem; color: #cbd5e1; margin-bottom: 25px; line-height: 1.6;">{{ p.description }}</p>
+
+                        <!-- İndirme / Bağlantı Alanı -->
+                        <div class="download-section">
+                            {% if p.download_enabled %}
+                                {% if p.file_path %}
+                                    <a href="/uploads/{{ p.file_path }}" class="btn-download active" download>📥 Doğrudan Dosyayı İndir</a>
+                                {% endif %}
+                                {% if p.link %}
+                                    <a href="{{ p.link }}" class="btn-download external" target="_blank">🔗 Harici Bağlantıya Git (İncele)</a>
+                                {% endif %}
+                                {% if not p.file_path and not p.link %}
+                                    <button class="btn-download disabled" disabled>🚫 Bağlantı Bulunmuyor</button>
+                                {% endif %}
+                            {% else %}
+                                <button class="btn-download disabled" disabled>🚫 Bu Proje İçin İndirme Kapatıldı</button>
+                            {% endif %}
+                        </div>
+
+                        <!-- Puanlama Alanı -->
+                        <div class="rating-box">
+                            <p style="font-size: 0.85rem; color: #cbd5e1;">Bu Projeyi Puanla (<span id="avg-rating-{{ p.id }}">{{ p.avg_rating | default(0) }}</span>/5 - Toplam Oy: <span id="rating-count-{{ p.id }}">{{ p.rating_count | default(0) }}</span>)</p>
+                            <div class="stars">
+                                <span onclick="rate('{{ p.id }}', 1)">★</span>
+                                <span onclick="rate('{{ p.id }}', 2)">★</span>
+                                <span onclick="rate('{{ p.id }}', 3)">★</span>
+                                <span onclick="rate('{{ p.id }}', 4)">★</span>
+                                <span onclick="rate('{{ p.id }}', 5)">★</span>
+                            </div>
+                        </div>
+
+                        <!-- Yorumlar Bölümü -->
+                        <div class="comments-box">
+                            <h3>Yorumlar</h3>
+                            <div class="comment-list" id="comment-list-{{ p.id }}">Yorumlar yükleniyor...</div>
+                            <div class="comment-input-group">
+                                <input type="text" id="comment-input-{{ p.id }}" placeholder="Düşüncelerini yaz...">
+                                <button onclick="postComment('{{ p.id }}')">Gönder</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    {% if music_list %}
+    <script>
+        let player = document.getElementById('audioPlayer');
+        let selector = document.getElementById('trackSelector');
+        let playIcon = document.getElementById('playIcon');
+        let titleEl = document.getElementById('currentTrackTitle');
+        let artistEl = document.getElementById('currentArtistName');
+        let thumbContainer = document.getElementById('currentThumbContainer');
+
+        function loadSelectedTrack() {
+            if (!selector.options.length) return;
+            let selectedOption = selector.options[selector.selectedIndex];
+            player.src = selector.value;
+            titleEl.innerText = selectedOption.getAttribute('data-title');
+            artistEl.innerText = selectedOption.getAttribute('data-artist');
+            let cover = selectedOption.getAttribute('data-cover');
+            if (cover) {
+                thumbContainer.innerHTML = `<img src="${cover}" alt="Cover">`;
+            } else {
+                thumbContainer.innerHTML = `<i class="fa-solid fa-music"></i>`;
+            }
+        }
+        function togglePlay() {
+            if (player.paused) { player.play(); playIcon.className = "fa-solid fa-pause"; }
+            else { player.pause(); playIcon.className = "fa-solid fa-play"; }
+        }
+        function switchTrack() { loadSelectedTrack(); player.play(); playIcon.className = "fa-solid fa-pause"; }
+        window.onload = function() { loadSelectedTrack(); };
+
+        function openModal(projectId) {
+            const modal = document.getElementById(`modal-${projectId}`);
+            if (modal) {
+                modal.style.display = 'flex';
+                document.body.style.overflow = 'hidden';
+                loadComments(projectId);
+            }
+        }
+
+        function closeModal(projectId) {
+            const modal = document.getElementById(`modal-${projectId}`);
+            if (modal) {
+                modal.style.display = 'none';
+                document.body.style.overflow = 'auto';
+                const vid = modal.querySelector('video');
+                if(vid) vid.pause();
+            }
+        }
+
+        async function rate(projectId, score) {
+            try {
+                let res = await fetch('/api/rate-project', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ project_id: projectId, rating: score })
+                });
+                let data = await res.json();
+                if(res.ok) {
+                    document.getElementById(`avg-rating-${projectId}`).innerText = data.avg_rating;
+                    document.getElementById(`rating-count-${projectId}`).innerText = data.rating_count;
+                    alert("Puanın başarıyla kaydedildi!");
+                }
+            } catch (err) {
+                console.error("Puan hatası:", err);
+            }
+        }
+
+        async function postComment(projectId) {
+            const inputField = document.getElementById(`comment-input-${projectId}`);
+            const commentText = inputField.value.trim();
+            if(!commentText) return;
+
+            try {
+                let res = await fetch('/api/post-comment', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ project_id: projectId, comment: commentText })
+                });
+                if(res.ok) {
+                    inputField.value = '';
+                    loadComments(projectId);
+                }
+            } catch (err) {
+                console.error("Yorum hatası:", err);
+            }
+        }
+
+        async function loadComments(projectId) {
+            try {
+                let res = await fetch(`/api/get-comments/${projectId}`);
+                let comments = await res.json();
+                const listContainer = document.getElementById(`comment-list-${projectId}`);
+                
+                listContainer.innerHTML = '';
+                if(comments.length === 0) {
+                    listContainer.innerHTML = '<p style="color: #94a3b8; font-style: italic;">Henüz yorum yapılmamış.</p>';
+                    return;
+                }
+
+                comments.forEach(c => {
+                    let p = document.createElement('p');
+                    p.style.margin = '4px 0';
+                    p.innerText = "• " + c.text;
+                    listContainer.appendChild(p);
+                });
+            } catch (err) {
+                console.error("Yorumları yükleme hatası:", err);
+            }
+        }
+    </script>
+    {% endif %}
+</body>
+</html>
+"""
+    return render_template_string(template, settings=settings, music_list=music_list, projects=projects)
+
+@app.route('/uploads/<filename>')
+def uploaded_file(filename):
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
+@app.route('/api/rate-project', methods=['POST'])
+def rate_project():
+    data = request.get_json()
+    project_id = data.get('project_id')
+    new_rating = int(data.get('rating'))
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT rating_sum, rating_count FROM projects WHERE id = ?', (project_id,))
+    p_data = cursor.fetchone()
+    
+    if not p_data:
+        conn.close()
+        return jsonify({"error": "Proje bulunamadı"}), 404
+        
+    new_sum = (p_data['rating_sum'] or 0) + new_rating
+    new_count = (p_data['rating_count'] or 0) + 1
+    new_avg = round(new_sum / new_count, 1)
+    
+    cursor.execute('UPDATE projects SET rating_sum = ?, rating_count = ?, avg_rating = ? WHERE id = ?', 
+                   (new_sum, new_count, new_avg, project_id))
+    conn.commit()
+    conn.close()
+    
+    return jsonify({"avg_rating": new_avg, "rating_count": new_count})
+
+@app.route('/api/post-comment', methods=['POST'])
+def post_comment():
+    data = request.get_json()
+    project_id = data.get('project_id')
+    comment_text = data.get('comment')
+    
+    if not comment_text:
+        return jsonify({"error": "Boş yorum gönderilemez"}), 400
+        
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('INSERT INTO comments (project_id, text) VALUES (?, ?)', (project_id, comment_text))
+    conn.commit()
+    conn.close()
+    
+    return jsonify({"status": "success", "text": comment_text})
+
+@app.route('/api/get-comments/<project_id>', methods=['GET'])
+def get_comments(project_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT text FROM comments WHERE project_id = ?', (project_id,))
+    comments = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return jsonify(comments)
+
+ADMIN_TEMPLATE_HTML = """
+    <nav>
+        <a href="/" class="logo"><i class="fa-solid fa-fire"></i> {{ settings.site_title }}</a>
+        <div class="nav-links">
+            <a href="/">Ana Sayfa</a>
+            <a href="/admin" class="btn-admin"><i class="fa-solid fa-gear"></i> Admin Panel</a>
+            <a href="/logout" style="color: #ef4444;"><i class="fa-solid fa-right-from-bracket"></i> Çıkış</a>
+        </div>
+    </nav>
+
+    <div class="container">
+        <div class="admin-box">
+            <h2><i class="fa-solid fa-sliders"></i> Özelleştirme ve Admin Paneli</h2>
+            {% with messages = get_flashed_messages() %}
+                {% if messages %}
+                    <div style="background: rgba(56,189,248,0.1); border: 1px solid var(--accent); padding: 10px; border-radius: 8px; margin-bottom: 20px; font-size: 0.82rem; color: var(--accent);">{{ messages[0] }}</div>
+                {% endif %}
+            {% endwith %}
+
+            <form method="POST" action="/admin/update_settings" enctype="multipart/form-data">
+                <div class="admin-card">
+                    <h3><i class="fa-solid fa-user-pen"></i> Genel Ayarlar</h3>
+                    <div class="form-group"><label>Site / Profil Başlığı</label><input type="text" name="site_title" class="form-input" value="{{ settings.site_title }}" required></div>
+                    <div class="form-group"><label>Hakkımda / Bio</label><textarea name="bio" class="form-input" rows="2" required>{{ settings.bio }}</textarea></div>
+                    <div class="form-group"><label>Profil Fotoğrafı Yükle</label><input type="file" name="avatar_file" class="form-input" accept=".jpg,.png,.jpeg"></div>
+                    <div class="form-group"><label>Veya Avatar URL</label><input type="text" name="avatar" class="form-input" value="{{ settings.avatar }}"></div>
+                </div>
+
+                <div class="admin-card">
+                    <h3><i class="fa-solid fa-wand-magic-sparkles"></i> Stil ve Efektler</h3>
+                    <div class="form-group"><label>Avatar Efekti</label>
+                        <select name="avatar_effect" class="form-input">
+                            <option value="neon_pulse" {% if settings.avatar_effect == 'neon_pulse' %}selected{% endif %}>Neon Işıltı</option>
+                            <option value="rainbow" {% if settings.avatar_effect == 'rainbow' %}selected{% endif %}>Gökkuşağı Çerçeve</option>
+                            <option value="cyberpunk" {% if settings.avatar_effect == 'cyberpunk' %}selected{% endif %}>Cyberpunk Çerçeve</option>
+                        </select>
+                    </div>
+                    <div class="form-group"><label>İsim / Başlık Efekti</label>
+                        <select name="name_effect" class="form-input">
+                            <option value="rainbow_glow" {% if settings.name_effect == 'rainbow_glow' %}selected{% endif %}>Gökkuşağı Parlaması</option>
+                            <option value="neon" {% if settings.name_effect == 'neon' %}selected{% endif %}>Neon Işık</option>
+                            <option value="normal" {% if settings.name_effect == 'normal' %}selected{% endif %}>Normal</option>
+                        </select>
+                    </div>
+                    <div class="form-group"><label>Arka Plan Türü</label>
+                        <select name="bg_type" class="form-input">
+                            <option value="image" {% if settings.bg_type == 'image' %}selected{% endif %}>Görsel / Resim</option>
+                            <option value="video" {% if settings.bg_type == 'video' %}selected{% endif %}>Video (MP4)</option>
+                        </select>
+                    </div>
+                    <div class="form-group"><label>Arka Plan Dosyası Yükle</label><input type="file" name="bg_file" class="form-input" accept=".jpg,.png,.jpeg,.mp4,.webm"></div>
+                    <div class="form-group"><label>Veya Arka Plan URL</label><input type="text" name="bg_image" class="form-input" value="{{ settings.bg_image }}"></div>
+                    <div class="form-group"><label>Tema Rengi (HEX - Örn: #38bdf8)</label><input type="text" name="accent_color" class="form-input" value="{{ settings.accent_color }}" required></div>
+                </div>
+
+                <div class="admin-card">
+                    <h3><i class="fa-solid fa-share-nodes"></i> Sosyal Medya Bağlantıları</h3>
+                    <div class="form-group"><label>Instagram URL</label><input type="text" name="instagram" class="form-input" value="{{ settings.instagram }}" placeholder="https://instagram.com/kullanici"></div>
+                    <div class="form-group"><label>TikTok URL</label><input type="text" name="tiktok" class="form-input" value="{{ settings.tiktok }}" placeholder="https://tiktok.com/@kullanici"></div>
+                    <div class="form-group"><label>YouTube URL</label><input type="text" name="youtube" class="form-input" value="{{ settings.youtube }}" placeholder="https://youtube.com/@kanal"></div>
+                    <div class="form-group"><label>Telegram URL</label><input type="text" name="telegram" class="form-input" value="{{ settings.telegram }}" placeholder="https://t.me/kullanici"></div>
+                    <div class="form-group"><label>Discord URL / Davet</label><input type="text" name="discord" class="form-input" value="{{ settings.discord }}" placeholder="https://discord.gg/kod"></div>
+                </div>
+
+                <button type="submit" class="btn-main">Tüm Değişiklikleri Kaydet</button>
+            </form>
+
+            <div class="admin-card" style="margin-top: 30px;">
+                <h3><i class="fa-solid fa-music"></i> Müzik Ekle & Yönet</h3>
+                <form method="POST" action="/admin/add_music" enctype="multipart/form-data">
+                    <div class="form-group"><label>Şarkı Adı</label><input type="text" name="title" class="form-input" required></div>
+                    <div class="form-group"><label>Sanatçı</label><input type="text" name="artist" class="form-input" required></div>
+                    <div class="form-group"><label>Müzik Dosyası (.mp3, .wav)</label><input type="file" name="music_file" class="form-input" accept=".mp3,.wav,.ogg,.m4a" required></div>
+                    <div class="form-group"><label>Şarkı / Kapak Fotoğrafı (Opsiyonel)</label><input type="file" name="cover_file" class="form-input" accept=".jpg,.png,.jpeg"></div>
+                    <button type="submit" class="btn-main">Müzik Ekle</button>
+                </form>
+                <table class="admin-table" style="margin-top:15px;">
+                    <tr><th>Şarkı</th><th>Sanatçı</th><th>İşlemler</th></tr>
+                    {% for m in music_list %}
+                    <tr>
+                        <td>{{ m.title }}</td>
+                        <td>{{ m.artist }}</td>
+                        <td>
+                            <div class="action-btns">
+                                <a href="/admin/edit_music/{{ m.id }}" class="btn-edit">Düzenle</a>
+                                <a href="/admin/delete_music/{{ m.id }}" class="btn-del">Sil</a>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </table>
+            </div>
+
+            <div class="admin-card" style="margin-top: 30px;">
+                <h3><i class="fa-solid fa-code"></i> Proje Ekle & Yönet</h3>
+                <form method="POST" action="/admin/add_project" enctype="multipart/form-data">
+                    <div class="form-group"><label>Başlık</label><input type="text" name="title" class="form-input" required></div>
+                    <div class="form-group"><label>Kategori</label><input type="text" name="category" class="form-input" required></div>
+                    <div class="form-group"><label>Açıklama</label><input type="text" name="description" class="form-input" required></div>
+                    <div class="form-group"><label>Harici İnceleme Linki (Opsiyonel)</label><input type="text" name="link" class="form-input"></div>
+                    
+                    <div class="form-group"><label>İndirilebilir Dosya Yükle (.zip, .apk, .rar vb.)</label><input type="file" name="project_file" class="form-input" accept=".zip,.rar,.apk,.pdf,.exe"></div>
+
+                    <div class="form-group"><label>Önizleme Videosu Yükle (MP4)</label><input type="file" name="video_file" class="form-input" accept=".mp4,.webm"></div>
+                    <div class="form-group"><label>Veya Önizleme Video URL</label><input type="text" name="video_url" class="form-input" placeholder="Direkt video linki"></div>
+                    
+                    <div class="form-group">
+                        <label>İndirme Durumu</label>
+                        <select name="download_enabled" class="form-input">
+                            <option value="1">İndirme Aktif</option>
+                            <option value="0">İndirme Kapalı</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group"><label>Proje Kapak Görseli Yükle</label><input type="file" name="image_file" class="form-input" accept=".jpg,.png,.jpeg"></div>
+                    <div class="form-group"><label>Veya Kapak Görsel URL</label><input type="text" name="image" class="form-input"></div>
+                    <button type="submit" class="btn-main">Projeyi Ekle</button>
+                </form>
+                <table class="admin-table" style="margin-top:15px;">
+                    <tr><th>Başlık</th><th>Kategori</th><th>İşlemler</th></tr>
+                    {% for p in projects %}
+                    <tr>
+                        <td>{{ p.title }}</td>
+                        <td>{{ p.category }}</td>
+                        <td>
+                            <div class="action-btns">
+                                <a href="/admin/edit_project/{{ p.id }}" class="btn-edit">Düzenle</a>
+                                <a href="/admin/delete_project/{{ p.id }}" class="btn-del">Sil</a>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </table>
+            </div>
+
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+@app.route('/admin')
+@login_required
+def admin():
+    if not current_user.is_admin: return redirect(url_for('index'))
+    settings = get_settings()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT id, title, category FROM projects')
+    projects = [dict(r) for r in cursor.fetchall()]
+    cursor.execute('SELECT id, title, artist FROM music')
+    music_list = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return render_template_string(BASE_TEMPLATE + ADMIN_TEMPLATE_HTML, settings=settings, projects=projects, music_list=music_list)
+
+@app.route('/admin/update_settings', methods=['POST'])
+@login_required
+def update_settings():
+    if current_user.is_admin:
+        title = request.form['site_title']
+        bio = request.form['bio']
+        accent = request.form['accent_color']
+        bg_type = request.form['bg_type']
+        avatar_effect = request.form['avatar_effect']
+        name_effect = request.form['name_effect']
+        
+        instagram = request.form.get('instagram', '').strip()
+        tiktok = request.form.get('tiktok', '').strip()
+        youtube = request.form.get('youtube', '').strip()
+        telegram = request.form.get('telegram', '').strip()
+        discord = request.form.get('discord', '').strip()
+
+        avatar_file = request.files.get('avatar_file')
+        avatar_url = request.form.get('avatar', '').strip()
+        bg_file = request.files.get('bg_file')
+        bg_image_url = request.form.get('bg_image', '').strip()
+        settings = get_settings()
+
+        avatar = avatar_url or settings['avatar']
+        if avatar_file and avatar_file.filename != '':
+            filename = secure_filename(avatar_file.filename)
+            avatar_file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+            avatar = f"/uploads/{filename}"
+
+        bg = bg_image_url or settings['bg_image']
+        if bg_file and bg_file.filename != '':
+            filename = secure_filename(bg_file.filename)
+            bg_file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+            bg = f"/uploads/{filename}"
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('''UPDATE settings SET site_title=?, bio=?, avatar=?, bg_image=?, accent_color=?, bg_type=?, avatar_effect=?, name_effect=?, instagram=?, tiktok=?, youtube=?, telegram=?, discord=? WHERE id=1''', 
+                       (title, bio, avatar, bg, accent, bg_type, avatar_effect, name_effect, instagram, tiktok, youtube, telegram, discord))
+        conn.commit()
+        conn.close()
+        flash('Değişiklikler başarıyla kaydedildi!')
+    return redirect(url_for('admin'))
+
+@app.route('/admin/add_music', methods=['POST'])
+@login_required
+def add_music():
+    if current_user.is_admin:
+        title = request.form['title']
+        artist = request.form['artist']
+        file = request.files['music_file']
+        cover_file = request.files.get('cover_file')
+        
+        if file and file.filename != '':
+            filename = secure_filename(file.filename)
+            file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+            
+            cover_name = None
+            if cover_file and cover_file.filename != '':
+                cover_name = secure_filename(cover_file.filename)
+                cover_file.save(os.path.join(app.config['UPLOAD_FOLDER'], cover_name))
+
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute('INSERT INTO music (title, artist, file_path, cover_image) VALUES (?, ?, ?, ?)', (title, artist, filename, cover_name))
+            conn.commit()
+            conn.close()
+            flash('Müzik ve kapak fotoğrafı eklendi!')
+    return redirect(url_for('admin'))
+
+@app.route('/admin/edit_music/<int:id>', methods=['GET', 'POST'])
+@login_required
+def edit_music(id):
+    if not current_user.is_admin: return redirect(url_for('index'))
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    if request.method == 'POST':
+        title = request.form['title']
+        artist = request.form['artist']
+        music_file = request.files.get('music_file')
+        cover_file = request.files.get('cover_file')
+
+        cursor.execute('SELECT file_path, cover_image FROM music WHERE id = ?', (id,))
+        old_music = cursor.fetchone()
+        file_path = old_music['file_path'] if old_music else None
+        cover_image = old_music['cover_image'] if old_music else None
+
+        if music_file and music_file.filename != '':
+            filename = secure_filename(music_file.filename)
+            music_file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+            file_path = filename
+
+        if cover_file and cover_file.filename != '':
+            cover_name = secure_filename(cover_file.filename)
+            cover_file.save(os.path.join(app.config['UPLOAD_FOLDER'], cover_name))
+            cover_image = cover_name
+
+        cursor.execute('UPDATE music SET title = ?, artist = ?, file_path = ?, cover_image = ? WHERE id = ?', 
+                       (title, artist, file_path, cover_image, id))
+        conn.commit()
+        conn.close()
+        flash('Şarkı başarıyla güncellendi!')
+        return redirect(url_for('admin'))
+
+    cursor.execute('SELECT * FROM music WHERE id = ?', (id,))
+    track = cursor.fetchone()
+    conn.close()
+    
+    if not track:
+        return redirect(url_for('admin'))
+
+    settings = get_settings()
+    EDIT_MUSIC_HTML = """
+    <nav>
+        <a href="/" class="logo"><i class="fa-solid fa-fire"></i> {{ settings.site_title }}</a>
+        <div class="nav-links">
+            <a href="/">Ana Sayfa</a>
+            <a href="/admin" class="btn-admin"><i class="fa-solid fa-gear"></i> Admin Panel</a>
+            <a href="/logout" style="color: #ef4444;"><i class="fa-solid fa-right-from-bracket"></i> Çıkış</a>
+        </div>
+    </nav>
+    <div class="container">
+        <div class="admin-box">
+            <h2><i class="fa-solid fa-pen-to-square"></i> Şarkıyı Düzenle</h2>
+            <form method="POST" enctype="multipart/form-data">
+                <div class="form-group"><label>Şarkı Adı</label><input type="text" name="title" class="form-input" value="{{ track.title }}" required></div>
+                <div class="form-group"><label>Sanatçı</label><input type="text" name="artist" class="form-input" value="{{ track.artist }}" required></div>
+                <div class="form-group"><label>Yeni Müzik Dosyası Yükle (İsteğe Bağlı)</label><input type="file" name="music_file" class="form-input" accept=".mp3,.wav,.ogg,.m4a"></div>
+                <div class="form-group"><label>Yeni Kapak Fotoğrafı Yükle (İsteğe Bağlı)</label><input type="file" name="cover_file" class="form-input" accept=".jpg,.png,.jpeg"></div>
+                <button type="submit" class="btn-main">Değişiklikleri Kaydet</button>
+            </form>
+            <div style="margin-top: 15px; text-align: center;">
+                <a href="/admin" style="color: #94a3b8; font-size: 0.85rem; text-decoration: none;"><i class="fa-solid fa-arrow-left"></i> Admin Panele Geri Dön</a>
+            </div>
+        </div>
+    </div>
+    </body></html>
+    """
+    return render_template_string(BASE_TEMPLATE + EDIT_MUSIC_HTML, settings=settings, track=track)
+
+@app.route('/admin/delete_music/<int:id>')
+@login_required
+def delete_music(id):
+    if current_user.is_admin:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM music WHERE id = ?', (id,))
+        conn.commit()
+        conn.close()
+        flash('Müzik silindi!')
+    return redirect(url_for('admin'))
+
+@app.route('/admin/add_project', methods=['POST'])
+@login_required
+def add_project():
+    if current_user.is_admin:
+        title = request.form['title']
+        category = request.form['category']
+        description = request.form['description']
+        link = request.form.get('link', '').strip() or None
+        download_enabled = int(request.form.get('download_enabled', 1))
+        
+        image_file = request.files.get('image_file')
+        image_url = request.form.get('image', '').strip() or None
+        image = image_url
+        if image_file and image_file.filename != '':
+            filename = secure_filename(image_file.filename)
+            image_file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+            image = f"/uploads/{filename}"
+
+        project_file = request.files.get('project_file')
+        file_path = None
+        if project_file and project_file.filename != '':
+            f_filename = secure_filename(project_file.filename)
+            project_file.save(os.path.join(app.config['UPLOAD_FOLDER'], f_filename))
+            file_path = f_filename
+
+        video_file = request.files.get('video_file')
+        video_url_input = request.form.get('video_url', '').strip() or None
+        video_url = video_url_input
+        if video_file and video_file.filename != '':
+            v_filename = secure_filename(video_file.filename)
+            video_file.save(os.path.join(app.config['UPLOAD_FOLDER'], v_filename))
+            video_url = f"/uploads/{v_filename}"
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('''INSERT INTO projects (title, category, description, link, image, video_url, file_path, download_enabled) 
+                          VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', 
+                       (title, category, description, link, image, video_url, file_path, download_enabled))
+        conn.commit()
+        conn.close()
+        flash('Proje başarıyla eklendi!')
+    return redirect(url_for('admin'))
+
+@app.route('/admin/edit_project/<int:id>', methods=['GET', 'POST'])
+@login_required
+def edit_project(id):
+    if not current_user.is_admin: return redirect(url_for('index'))
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    if request.method == 'POST':
+        title = request.form['title']
+        category = request.form['category']
+        description = request.form['description']
+        link = request.form.get('link', '').strip() or None
+        download_enabled = int(request.form.get('download_enabled', 1))
+        
+        image_file = request.files.get('image_file')
+        image_url = request.form.get('image', '').strip() or None
+        project_file = request.files.get('project_file')
+        video_file = request.files.get('video_file')
+        video_url_input = request.form.get('video_url', '').strip() or None
+
+        cursor.execute('SELECT image, video_url, file_path FROM projects WHERE id = ?', (id,))
+        old_proj = cursor.fetchone()
+        image = old_proj['image'] if old_proj else None
+        video_url = old_proj['video_url'] if old_proj else None
+        file_path = old_proj['file_path'] if old_proj else None
+
+        if image_url: image = image_url
+        if image_file and image_file.filename != '':
+            filename = secure_filename(image_file.filename)
+            image_file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+            image = f"/uploads/{filename}"
+
+        if project_file and project_file.filename != '':
+            f_filename = secure_filename(project_file.filename)
+            project_file.save(os.path.join(app.config['UPLOAD_FOLDER'], f_filename))
+            file_path = f_filename
+
+        if video_url_input: video_url = video_url_input
+        if video_file and video_file.filename != '':
+            v_filename = secure_filename(video_file.filename)
+            video_file.save(os.path.join(app.config['UPLOAD_FOLDER'], v_filename))
+            video_url = f"/uploads/{v_filename}"
+
+        cursor.execute('''UPDATE projects SET title = ?, category = ?, description = ?, link = ?, image = ?, video_url = ?, file_path = ?, download_enabled = ? WHERE id = ?''', 
+                       (title, category, description, link, image, video_url, file_path, download_enabled, id))
+        conn.commit()
+        conn.close()
+        flash('Proje başarıyla güncellendi!')
+        return redirect(url_for('admin'))
+
+    cursor.execute('SELECT * FROM projects WHERE id = ?', (id,))
+    project = cursor.fetchone()
+    conn.close()
+    
+    if not project:
+        return redirect(url_for('admin'))
+
+    settings = get_settings()
+    EDIT_PROJECT_HTML = """
+    <nav>
+        <a href="/" class="logo"><i class="fa-solid fa-fire"></i> {{ settings.site_title }}</a>
+        <div class="nav-links">
+            <a href="/">Ana Sayfa</a>
+            <a href="/admin" class="btn-admin"><i class="fa-solid fa-gear"></i> Admin Panel</a>
+            <a href="/logout" style="color: #ef4444;"><i class="fa-solid fa-right-from-bracket"></i> Çıkış</a>
+        </div>
+    </nav>
+    <div class="container">
+        <div class="admin-box">
+            <h2><i class="fa-solid fa-pen-to-square"></i> Projeyi Düzenle</h2>
+            <form method="POST" enctype="multipart/form-data">
+                <div class="form-group"><label>Başlık</label><input type="text" name="title" class="form-input" value="{{ project.title }}" required></div>
+                <div class="form-group"><label>Kategori</label><input type="text" name="category" class="form-input" value="{{ project.category }}" required></div>
+                <div class="form-group"><label>Açıklama</label><input type="text" name="description" class="form-input" value="{{ project.description }}" required></div>
+                <div class="form-group"><label>Harici İnceleme Linki</label><input type="text" name="link" class="form-input" value="{{ project.link or '' }}"></div>
+                
+                <div class="form-group">
+                    <label>İndirme Durumu</label>
+                    <select name="download_enabled" class="form-input">
+                        <option value="1" {% if project.download_enabled == 1 %}selected{% endif %}>İndirme Aktif</option>
+                        <option value="0" {% if project.download_enabled == 0 %}selected{% endif %}>İndirme Kapalı</option>
+                    </select>
+                </div>
+
+                <div class="form-group"><label>Yeni İndirilebilir Dosya Yükle</label><input type="file" name="project_file" class="form-input" accept=".zip,.rar,.apk,.pdf,.exe"></div>
+                <div class="form-group"><label>Yeni Önizleme Videosu Yükle</label><input type="file" name="video_file" class="form-input" accept=".mp4,.webm"></div>
+                <div class="form-group"><label>Veya Video URL</label><input type="text" name="video_url" class="form-input" value="{{ project.video_url or '' }}"></div>
+
+                <div class="form-group"><label>Yeni Proje Kapak Görseli Yükle</label><input type="file" name="image_file" class="form-input" accept=".jpg,.png,.jpeg"></div>
+                <div class="form-group"><label>Veya Görsel URL</label><input type="text" name="image" class="form-input" value="{{ project.image or '' }}"></div>
+                <button type="submit" class="btn-main">Değişiklikleri Kaydet</button>
+            </form>
+            <div style="margin-top: 15px; text-align: center;">
+                <a href="/admin" style="color: #94a3b8; font-size: 0.85rem; text-decoration: none;"><i class="fa-solid fa-arrow-left"></i> Admin Panele Geri Dön</a>
+            </div>
+        </div>
+    </div>
+    </body></html>
+    """
+    return render_template_string(BASE_TEMPLATE + EDIT_PROJECT_HTML, settings=settings, project=project)
+
+@app.route('/admin/delete_project/<int:id>')
+@login_required
+def delete_project(id):
+    if current_user.is_admin:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM projects WHERE id = ?', (id,))
+        conn.commit()
+        conn.close()
+        flash('Proje silindi!')
+    return redirect(url_for('admin'))
+
+AUTH_BASE_HTML = """
+    <div class="container" style="display:flex; justify-content:center; align-items:center; min-height:75vh;">
+        <div class="admin-box" style="width:100%; max-width:380px;">
+"""
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT id, username, password, is_admin FROM users WHERE username = ?', (username,))
+        row = cursor.fetchone()
+        conn.close()
+        
+        if row and check_password_hash(row['password'], password):
+            user = User(id=row['id'], username=row['username'], is_admin=bool(row['is_admin']))
+            login_user(user)
+            return redirect(url_for('admin') if user.is_admin else url_for('index'))
+        else:
+            flash('Hatalı kullanıcı adı veya şifre!')
+
+    settings = get_settings()
+    return render_template_string(BASE_TEMPLATE + AUTH_BASE_HTML + """
+            <h2>Giriş Yap</h2>
+            {% with messages = get_flashed_messages() %}
+                {% if messages %}<div style="background:rgba(239,68,68,0.1); border:1px solid #ef4444; padding:8px; border-radius:6px; margin-bottom:15px; font-size:0.8rem; color:#fca5a5;">{{ messages[0] }}</div>{% endif %}
+            {% endwith %}
+            <form method="POST">
+                <div class="form-group"><label>Kullanıcı Adı</label><input type="text" name="username" class="form-input" required></div>
+                <div class="form-group"><label>Şifre</label><input type="password" name="password" class="form-input" required></div>
+                <button type="submit" class="btn-main">Giriş Yap</button>
+            </form>
+        </div></div></body></html>
+    """, settings=settings)
+
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = generate_password_hash(request.form['password'])
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute('INSERT INTO users (username, password, is_admin) VALUES (?, ?, 0)', (username, password))
+            conn.commit()
+            conn.close()
+            flash('Kayıt başarılı! Giriş yapabilirsin.')
+            return redirect(url_for('login'))
+        except:
+            flash('Bu kullanıcı adı zaten alınmış!')
+
+    settings = get_settings()
+    return render_template_string(BASE_TEMPLATE + AUTH_BASE_HTML + """
+            <h2>Kayıt Ol</h2>
+            {% with messages = get_flashed_messages() %}
+                {% if messages %}<div style="background:rgba(239,68,68,0.1); border:1px solid #ef4444; padding:8px; border-radius:6px; margin-bottom:15px; font-size:0.8rem; color:#fca5a5;">{{ messages[0] }}</div>{% endif %}
+            {% endwith %}
+            <form method="POST">
+                <div class="form-group"><label>Kullanıcı Adı</label><input type="text" name="username" class="form-input" required></div>
+                <div class="form-group"><label>Şifre</label><input type="password" name="password" class="form-input" required></div>
+                <button type="submit" class="btn-main">Kayıt Ol</button>
+            </form>
+        </div></div></body></html>
+    """, settings=settings)
+
+@app.route('/logout')
+@login_required
+def logout():
+    logout_user()
+    return redirect(url_for('login'))
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000, debug=True)
+

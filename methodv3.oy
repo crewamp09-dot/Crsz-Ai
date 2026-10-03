@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CompressBase</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <header class="navbar">
+        <div class="logo">
+            <i class="fa-solid fa-bolt"></i> CompressBase
+        </div>
+        <button id="menu-toggle" aria-label="Menüyü Aç">
+            <i class="fa-solid fa-bars"></i>
+        </button>
+        
+        <nav id="dropdown-menu" class="dropdown-menu">
+            <ul>
+                <li><a href="#"><i class="fa-solid fa-house"></i> Ana Sayfa</a></li>
+                <li><a href="#"><i class="fa-solid fa-cloud-arrow-up"></i> Yükleme Paneli</a></li>
+                <li><a href="#"><i class="fa-solid fa-toolbox"></i> Araçlar</a></li>
+                <li><a href="#"><i class="fa-solid fa-users"></i> İş Ortakları</a></li>
+            </ul>
+        </nav>
+    </header>
+
+    <main class="container">
+        <section class="upload-section">
+            <h2>Video Yükleme</h2>
+            
+            <div class="drop-zone" id="drop-zone">
+                <i class="fa-solid fa-cloud-arrow-up upload-icon"></i>
+                <p>Videoyu buraya sürükleyin veya seçin</p>
+                <input type="file" id="video-input" accept="video/*" hidden>
+                <button id="select-btn" class="primary-btn">Dosya Seç</button>
+            </div>
+
+            <div class="options-section">
+                <label class="custom-checkbox">
+                    <input type="checkbox" id="optimize-tiktok">
+                    <span class="checkmark"></span>
+                    <i class="fa-brands fa-tiktok"></i> Optimize file size for TikTok
+                </label>
+            </div>
+        </section>
+    </main>
+
+    <script src="script.js"></script>
+</body>
+</html>
+:root {
+    --bg-color: #0d0d0d;
+    --card-bg: #161616;
+    --accent-color: #f3c614;
+    --text-color: #ffffff;
+    --text-muted: #a0a0a0;
+    --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+body {
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    min-height: 100vh;
+}
+
+/* Navbar */
+.navbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 20px 5%;
+    background-color: var(--card-bg);
+    border-bottom: 1px solid #222;
+    position: relative;
+    z-index: 100;
+}
+
+.logo {
+    font-size: 1.3rem;
+    font-weight: bold;
+    color: var(--accent-color);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+#menu-toggle {
+    background: none;
+    border: none;
+    color: var(--text-color);
+    font-size: 1.4rem;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+#menu-toggle:hover {
+    color: var(--accent-color);
+}
+
+/* Akıcı Dropdown Menü */
+.dropdown-menu {
+    position: absolute;
+    top: 100%;
+    right: 5%;
+    background-color: var(--card-bg);
+    border: 1px solid #333;
+    border-radius: 12px;
+    width: 220px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(-10px);
+    transition: var(--transition);
+}
+
+.dropdown-menu.active {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
+}
+
+.dropdown-menu ul {
+    list-style: none;
+    padding: 8px 0;
+}
+
+.dropdown-menu ul li a {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 20px;
+    color: var(--text-color);
+    text-decoration: none;
+    transition: var(--transition);
+    font-size: 0.95rem;
+}
+
+.dropdown-menu ul li a:hover {
+    background-color: rgba(243, 198, 20, 0.1);
+    color: var(--accent-color);
+}
+
+/* İçerik & Yükleme Alanı */
+.container {
+    max-width: 600px;
+    margin: 40px auto;
+    padding: 0 20px;
+}
+
+.upload-section {
+    background-color: var(--card-bg);
+    border: 1px solid #222;
+    border-radius: 16px;
+    padding: 30px;
+    text-align: center;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+}
+
+.upload-section h2 {
+    margin-bottom: 20px;
+    font-size: 1.5rem;
+}
+
+.drop-zone {
+    border: 2px dashed #333;
+    border-radius: 12px;
+    padding: 40px 20px;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.drop-zone:hover {
+    border-color: var(--accent-color);
+    background-color: rgba(243, 198, 20, 0.02);
+}
+
+.upload-icon {
+    font-size: 3rem;
+    color: var(--accent-color);
+    margin-bottom: 15px;
+}
+
+.primary-btn {
+    background-color: var(--accent-color);
+    color: #000;
+    border: none;
+    padding: 10px 24px;
+    font-weight: bold;
+    border-radius: 8px;
+    cursor: pointer;
+    margin-top: 15px;
+    transition: var(--transition);
+}
+
+.primary-btn:hover {
+    opacity: 0.9;
+    transform: scale(1.02);
+}
+
+/* Checkbox (TikTok Optimizasyonu) */
+.options-section {
+    margin-top: 25px;
+    text-align: left;
+}
+
+.custom-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    cursor: pointer;
+    font-size: 0.95rem;
+    color: var(--text-muted);
+    user-select: none;
+    transition: var(--transition);
+}
+
+.custom-checkbox:hover {
+    color: var(--text-color);
+}
+
+.custom-checkbox input {
+    cursor: pointer;
+    accent-color: var(--accent-color);
+    width: 18px;
+    height: 18px;
+}
+// 1. Menü Açma/Kapatma Mantığı
+const menuToggle = document.getElementById('menu-toggle');
+const dropdownMenu = document.getElementById('dropdown-menu');
+
+menuToggle.addEventListener('click', (e) => {
+    e.stopPropagation();
+    dropdownMenu.classList.toggle('active');
+});
+
+// Sayfa içinde başka bir yere tıklandığında menüyü kapat
+window.addEventListener('click', () => {
+    if (dropdownMenu.classList.contains('active')) {
+        dropdownMenu.classList.remove('active');
+    }
+});
+
+// 2. Video Dosyası Seçme ve Yükleme İşlemleri
+const dropZone = document.getElementById('drop-zone');
+const videoInput = document.getElementById('video-input');
+const selectBtn = document.getElementById('select-btn');
+
+selectBtn.addEventListener('click', () => {
+    videoInput.click();
+});
+
+dropZone.addEventListener('click', () => {
+    videoInput.click();
+});
+
+videoInput.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (file) {
+        alert(`Seçilen video: ${file.name}`);
+    }
+});
+
+// Sürükle-bırak desteği
+dropZone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    dropZone.style.borderColor = 'var(--accent-color)';
+});
+
+dropZone.addEventListener('dragleave', () => {
+    dropZone.style.borderColor = '#333';
+});
+
+dropZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dropZone.style.borderColor = '#333';
+    const file = e.dataTransfer.files[0];
+    if (file && file.type.startsWith('video/')) {
+        alert(`Video başarıyla yüklendi: ${file.name}`);
+    } else {
+        alert('Lütfen geçerli bir video dosyası bırakın!');
+    }
+});
+
+// 3. TikTok Optimizasyon Seçeneği Etkileşimi
+const optimizeCheckbox = document.getElementById('optimize-tiktok');
+optimizeCheckbox.addEventListener('change', (e) => {
+    if (e.target.checked) {
+        console.log("TikTok optimizasyonu aktif.");
+    } else {
+        console.log("TikTok optimizasyonu pasif.");
+    }
+});
+

