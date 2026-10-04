@@ -112,6 +112,7 @@ def init_db():
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )""")
+    # YENİ: Bot hafıza tablosu (kalıcı bellek)
     c.execute("""CREATE TABLE IF NOT EXISTS bot_memory (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT, role TEXT, content TEXT, image_data TEXT,
@@ -119,54 +120,6 @@ def init_db():
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )""")
     conn.commit()
-
-    # ============ MIGRATION: Eski tablolara eksik kolonları ekle ============
-    def column_exists(table, column):
-        try:
-            c.execute(f"PRAGMA table_info({table})")
-            cols = [row[1] for row in c.fetchall()]
-            return column in cols
-        except Exception:
-            return False
-
-    # users tablosuna language kolonu ekle (eski DB'de yoksa)
-    if not column_exists("users", "language"):
-        try:
-            c.execute("ALTER TABLE users ADD COLUMN language TEXT DEFAULT 'tr'")
-            conn.commit()
-            print("[DB MIGRATION] users tablosuna 'language' kolonu eklendi.")
-        except Exception as e:
-            print(f"[DB MIGRATION HATA] language: {e}")
-
-    # users tablosuna is_admin kolonu ekle
-    if not column_exists("users", "is_admin"):
-        try:
-            c.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0")
-            conn.commit()
-            print("[DB MIGRATION] users tablosuna 'is_admin' kolonu eklendi.")
-        except Exception as e:
-            print(f"[DB MIGRATION HATA] is_admin: {e}")
-
-    # users tablosuna avatar kolonu ekle
-    if not column_exists("users", "avatar"):
-        try:
-            c.execute("ALTER TABLE users ADD COLUMN avatar TEXT")
-            conn.commit()
-            print("[DB MIGRATION] users tablosuna 'avatar' kolonu eklendi.")
-        except Exception as e:
-            print(f"[DB MIGRATION HATA] avatar: {e}")
-
-    # users tablosuna email kolonu ekle
-    if not column_exists("users", "email"):
-        try:
-            c.execute("ALTER TABLE users ADD COLUMN email TEXT")
-            conn.commit()
-            print("[DB MIGRATION] users tablosuna 'email' kolonu eklendi.")
-        except Exception as e:
-            print(f"[DB MIGRATION HATA] email: {e}")
-
-    # ============ ADMİN HESAPLARI ============
-    # crewampfilms admin hesabı (yoksa oluştur, varsa admin yap)
     c.execute("SELECT COUNT(*) FROM users WHERE username = ?", ("crewampfilms",))
     if c.fetchone()[0] == 0:
         hashed = generate_password_hash("123")
@@ -174,23 +127,6 @@ def init_db():
                   ("crewampfilms", "crszbot052@gmail.com", hashed))
         conn.commit()
         print("[DB] Admin oluşturuldu: crewampfilms / 123")
-    else:
-        c.execute("UPDATE users SET is_admin = 1 WHERE username = ?", ("crewampfilms",))
-        conn.commit()
-        print("[DB] Admin yetkisi garanti edildi: crewampfilms")
-
-    # crew kullanıcısı da admin olsun
-    c.execute("SELECT COUNT(*) FROM users WHERE username = ?", ("crew",))
-    if c.fetchone()[0] == 0:
-        hashed2 = generate_password_hash("123")
-        c.execute("INSERT INTO users (username, email, password, is_admin, language) VALUES (?, ?, ?, 1, 'tr')",
-                  ("crew", "", hashed2))
-        conn.commit()
-        print("[DB] Admin oluşturuldu: crew / 123")
-    else:
-        c.execute("UPDATE users SET is_admin = 1 WHERE username = ?", ("crew",))
-        conn.commit()
-
     conn.close()
 
 
@@ -295,11 +231,13 @@ def save_user_avatar(username, filename):
 
 # ============ BOT HAFIZA FONKSİYONLARI ============
 def memory_add(username, role, content, image_data=None, language="tr"):
+    """Kullanıcının bot hafızasına yeni mesaj ekle"""
     try:
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
         c.execute("INSERT INTO bot_memory (username, role, content, image_data, language) VALUES (?, ?, ?, ?, ?)",
                   (username, role, content, image_data, language))
+        # Her kullanıcı için son 50 mesajı tut, eskilerini sil
         c.execute("""DELETE FROM bot_memory WHERE username = ? AND id NOT IN (
             SELECT id FROM bot_memory WHERE username = ? ORDER BY id DESC LIMIT 50
         )""", (username, username))
@@ -312,6 +250,7 @@ def memory_add(username, role, content, image_data=None, language="tr"):
 
 
 def memory_get(username, limit=20):
+    """Kullanıcının son N mesajını al (kronolojik sırada)"""
     try:
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
@@ -320,6 +259,7 @@ def memory_get(username, limit=20):
                      ORDER BY id DESC LIMIT ?""", (username, limit))
         rows = c.fetchall()
         conn.close()
+        # Kronolojik sıraya çevir
         rows.reverse()
         return [{"role": r[0], "content": r[1], "image_data": r[2]} for r in rows]
     except Exception as e:
@@ -328,6 +268,7 @@ def memory_get(username, limit=20):
 
 
 def memory_clear(username):
+    """Kullanıcının bot hafızasını temizle"""
     try:
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
@@ -420,6 +361,7 @@ def is_admin_user(username):
 
 # ============ GELİŞMİŞ WEB SEARCH ============
 def web_search(query, max_results=5):
+    """Çoklu kaynak: Wikipedia + DuckDuckGo API + HTML fallback"""
     if requests is None:
         return ""
 
@@ -502,8 +444,9 @@ def web_search(query, max_results=5):
     return "\n".join(unique[:max_results])
 
 
-# ============ SOSYAL MEDYA & DIŞ KAYNAK ERİŞİMİ ============
+# ============ YENİ: SOSYAL MEDYA & DIŞ KAYNAK ERİŞİMİ ============
 def detect_social_url(text):
+    """Metinde sosyal medya linki var mı tespit et"""
     patterns = {
         "tiktok": r"(?:https?://)?(?:www\.)?tiktok\.com/@[\w.\-]+/video/\d+",
         "instagram": r"(?:https?://)?(?:www\.)?instagram\.com/(?:p|reel|tv)/[\w\-]+",
@@ -524,6 +467,7 @@ def detect_social_url(text):
 
 
 def fetch_social_content(platform, url):
+    """Sosyal medya platformundan içerik çek (oEmbed + Public API)"""
     if requests is None:
         return ""
     headers = {
@@ -544,6 +488,7 @@ def fetch_social_content(platform, url):
                     info.append(f"[TikTok] Platform: {d.get('provider_name')}")
 
         elif platform == "instagram":
+            # Instagram oEmbed public API (yeni endpoint)
             oembed = f"https://graph.facebook.com/v18.0/instagram_oembed?url={url}"
             r = requests.get(oembed, headers=headers, timeout=8)
             if r.status_code == 200:
@@ -552,6 +497,7 @@ def fetch_social_content(platform, url):
                 if d.get('title'):
                     info.append(f"[Instagram] Başlık: {d.get('title')}")
             else:
+                # Alternatif: HTML scrape
                 r2 = requests.get(url, headers=headers, timeout=8)
                 if r2.status_code == 200:
                     html = r2.text
@@ -594,6 +540,7 @@ def fetch_social_content(platform, url):
                     if post.get('selftext'):
                         info.append(f"[Reddit] İçerik: {post['selftext'][:500]}")
                     info.append(f"[Reddit] Upvote: {post.get('ups', 0)} | Yorum: {post.get('num_comments', 0)}")
+                    # İlk 3 yorum
                     if len(data) > 1:
                         comments = data[1].get("data", {}).get("children", [])[:3]
                         for i, cm in enumerate(comments):
@@ -602,6 +549,7 @@ def fetch_social_content(platform, url):
                                 info.append(f"[Reddit Yorum-{i+1}] u/{cd.get('author', '?')}: {cd['body'][:200]}")
 
         elif platform == "github":
+            # URL parse: github.com/user/repo
             parts = url.rstrip("/").split("/")
             if len(parts) >= 2:
                 api_url = f"https://api.github.com/repos/{parts[-2]}/{parts[-1]}"
@@ -634,16 +582,19 @@ def should_search(msg):
     return any(t in m for t in triggers)
 
 
-# ============ HAFIZALI AI YANITI ============
+# ============ YENİ: HAFIZALI AI YANITI ============
 def get_ai_response(username, user_message, image_data=None):
     is_owner = is_admin_user(username)
     if not is_owner and ("samimi" in user_message.lower() and ("konuş" in user_message.lower() or "ol" in user_message.lower())):
         user_samimi_status[username] = True
     samimi_mode = is_owner or user_samimi_status.get(username, False)
 
+    # Kullanıcının kayıtlı dilini al
     user = get_user_from_db(username)
     user_lang = (user.get("language") if user else "tr") or "tr"
+    lang_name = SUPPORTED_LANGUAGES.get(user_lang, "Türkçe")
 
+    # Dil tespiti (mesajda açıkça dil isteği)
     detected_lang = None
     lang_commands = {
         "ingilizce": "en", "english": "en", "speak english": "en",
@@ -666,10 +617,12 @@ def get_ai_response(username, user_message, image_data=None):
     active_lang_code = detected_lang or user_lang
     active_lang_name = SUPPORTED_LANGUAGES.get(active_lang_code, "Türkçe")
 
+    # Dil değişikliği kalıcı olsun
     if detected_lang and detected_lang != user_lang:
         update_user_language(username, detected_lang)
         user_lang = detected_lang
 
+    # Persona
     if is_owner:
         persona = (
             f"Senin adın {APP_STATE['bot_name']}. Karşındaki kişi senin sahibin crewampfilms. "
@@ -683,23 +636,27 @@ def get_ai_response(username, user_message, image_data=None):
     else:
         persona = f"Senin adın {APP_STATE['bot_name']}. Karşındaki kullanıcı ({username}) ile resmi, kibar ve yardımcı bir dille konuş."
 
+    # DİL TALİMATI - en kritik kısım
     lang_instruction = (
-        f"\n\nCok onemli dil kurali: Su andan itibaren SADECE {active_lang_name} ({active_lang_code.upper()}) dilinde yanit ver. "
-        f"Onceki mesajlarda farkli dilde konusmus olsan bile, bundan sonraki TUM yanitlarini {active_lang_name} dilinde ver. "
-        f"Kullanici 'devam et', 'konus', 'yaz' gibi bir sey derse bile {active_lang_name} dilinde devam et. "
-        f"Dili degistirmek icin kullanicinin acikca 'X diline gec' veya 'konus X' demesi gerekir."
+        f"\n\n🔴 ÇOK ÖNEMLİ DİL KURALI: Şu andan itibaren SADECE {active_lang_name} ({active_lang_code.upper()}) dilinde yanıt ver. "
+        f"Önceki mesajlarda farklı dilde konuşmuş olsan bile, bundan sonraki TÜM yanıtlarını {active_lang_name} dilinde ver. "
+        f"Kullanıcı 'devam et', 'konuş', 'yaz' gibi bir şey derse bile {active_lang_name} dilinde devam et. "
+        f"Dili değiştirmek için kullanıcının açıkça 'X diline geç' veya 'konuş X' demesi gerekir."
     )
     persona += lang_instruction
 
+    # ============ HAFIZA (MEMORY) YÜKLE ============
     memory = memory_get(username, limit=20)
     messages = [{"role": "system", "content": persona}]
 
+    # Önceki konuşmaları mesaj listesine ekle
     for m in memory:
         if m["role"] == "user":
             content = m["content"]
             if m.get("image_data"):
+                # Görsel varsa içerik listesi formatında ekle
                 messages.append({"role": "user", "content": [
-                    {"type": "text", "text": content if content else "[Fotograf]"},
+                    {"type": "text", "text": content if content else "[Fotoğraf]"},
                     {"type": "image_url", "image_url": {"url": m["image_data"]}}
                 ]})
             else:
@@ -707,17 +664,19 @@ def get_ai_response(username, user_message, image_data=None):
         elif m["role"] == "assistant":
             messages.append({"role": "assistant", "content": m["content"]})
 
+    # Şimdiki mesaj
     if image_data:
         if "," in image_data:
-            image_url = image_data
+            image_url = image_data  # zaten data:image/... formatında
         else:
             image_url = f"data:image/jpeg;base64,{image_data}"
         messages.append({"role": "user", "content": [
-            {"type": "text", "text": user_message if user_message else "Bu fotograftaki nedir? Analiz et."},
+            {"type": "text", "text": user_message if user_message else "Bu fotoğraftaki nedir? Analiz et."},
             {"type": "image_url", "image_url": {"url": image_url}}
         ]})
         model_chain = ["meta-llama/llama-4-scout-17b-16e-instruct", "meta-llama/llama-4-maverick-17b-128e-instruct"]
     else:
+        # SOSYAL MEDYA / DIŞ KAYNAK KONTROLÜ
         social_context = ""
         platform, url = detect_social_url(user_message)
         if platform and url:
@@ -725,45 +684,48 @@ def get_ai_response(username, user_message, image_data=None):
             social_data = fetch_social_content(platform, url)
             if social_data:
                 social_context = (
-                    f"\n\n===== DIS KAYNAK ICERIGI ({platform.upper()}) =====\n"
+                    f"\n\n===== DIŞ KAYNAK İÇERİĞİ ({platform.upper()}) =====\n"
                     f"{social_data}\n"
                     f"================================================\n\n"
-                    f"Yukaridaki verilere dayanarak kullanicinin sorusunu yanitla. "
-                    f"Icerigi dogal bir sekilde ozetle, platform adini belirt."
+                    f"Yukarıdaki verilere dayanarak kullanıcının sorusunu yanıtla. "
+                    f"İçeriği doğal bir şekilde özetle, platform adını belirt."
                 )
             else:
-                social_context = f"\n\n[NOT] {platform} linkinden icerik cekilemedi. Kullaniciya kibarca belirt."
+                social_context = f"\n\n[NOT] {platform} linkinden içerik çekilemedi. Kullanıcıya kibarca belirt."
 
+        # WEB SEARCH
         search_context = ""
         if not social_context and should_search(user_message):
             print(f"[WEB SEARCH] '{user_message}'")
             search_result = web_search(user_message)
             if search_result:
                 search_context = (
-                    f"\n\n===== WEB ARASTIRMASI SONUCLARI =====\n"
+                    f"\n\n===== WEB ARAŞTIRMASI SONUÇLARI =====\n"
                     f"{search_result}\n"
                     f"======================================\n\n"
-                    f"Yukaridaki bilgileri kullanarak kullanicinin sorusuna dogal, akici ve "
-                    f"{active_lang_name} bir yanit ver. Kaynaklari [Kaynak: Wikipedia] gibi belirt. "
-                    f"Eger sonuclar yetersizse bunu durustce soyle."
+                    f"Yukarıdaki bilgileri kullanarak kullanıcının sorusuna doğal, akıcı ve "
+                    f"{active_lang_name} bir yanıt ver. Kaynakları [Kaynak: Wikipedia] gibi belirt. "
+                    f"Eğer sonuçlar yetersizse bunu dürüstçe söyle."
                 )
             else:
                 search_context = (
-                    f"\n\n[NOT] Kullanici web'de arastirma yapmani istedi ama hicbir kaynakta "
-                    f"guvenilir bilgi bulunamadi. Kullaniciya bunu kibarca belirt."
+                    f"\n\n[NOT] Kullanıcı web'de araştırma yapmanı istedi ama hiçbir kaynakta "
+                    f"güvenilir bilgi bulunamadı. Kullanıcıya bunu kibarca belirt."
                 )
 
+        # Kullanıcı link attıysa ama tanınmadıysa
         url_check = re.search(r"(https?://[^\s]+)", user_message)
         if url_check and not platform:
             social_context = (
-                f"\n\n[NOT] Kullanici bir link paylasti ama bu link desteklenen platformlardan degil. "
-                f"Kullaniciya hangi platformlarin desteklendigini soyle: TikTok, Instagram, Twitter/X, YouTube, Reddit, GitHub, Spotify."
+                f"\n\n[NOT] Kullanıcı bir link paylaştı ama bu link desteklenen platformlardan değil. "
+                f"Kullanıcıya hangi platformların desteklendiğini söyle: TikTok, Instagram, Twitter/X, YouTube, Reddit, GitHub, Spotify."
             )
 
         full_message = user_message + social_context + search_context
         messages.append({"role": "user", "content": full_message})
         model_chain = ["openai/gpt-oss-20b", "openai/gpt-oss-120b"]
 
+    # HAFIZAYA KAYDET: kullanıcı mesajı
     memory_add(username, "user", user_message, image_data, active_lang_code)
 
     last_error = None
@@ -776,6 +738,7 @@ def get_ai_response(username, user_message, image_data=None):
             reply = completion.choices[0].message.content.strip()
             if reply:
                 print(f"[MODEL] Başarılı: {model_name}")
+                # HAFIZAYA KAYDET: bot cevabı
                 memory_add(username, "assistant", reply, None, active_lang_code)
                 return reply
         except Exception as e:
@@ -783,14 +746,14 @@ def get_ai_response(username, user_message, image_data=None):
             err = last_error.lower()
             print(f"[MODEL HATA] {model_name}: {err[:200]}")
             if "api key" in err or "401" in err or "invalid_api_key" in err:
-                return "API anahtari gecersiz. Groq konsolundan yeni anahtar alman gerekiyor."
+                return "API anahtarı geçersiz. Groq konsolundan yeni anahtar alman gerekiyor."
             if "rate" in err or "429" in err:
-                return "Su an cok fazla istek var, birkac saniye sonra tekrar dene."
+                return "Şu an çok fazla istek var, birkaç saniye sonra tekrar dene."
             continue
 
     if last_error:
-        return f"Modeller yanit vermedi. Son hata: {last_error[:300]}"
-    return "Bilinmeyen bir hata olustu."
+        return f"Modeller yanıt vermedi. Son hata: {last_error[:300]}"
+    return "Bilinmeyen bir hata oluştu."
 
 
 @app.route("/")
@@ -887,6 +850,7 @@ def maintenance_toggle():
     return jsonify({"status": "success", "enabled": enabled})
 
 
+# YENİ: Hafızayı temizleme endpoint'i
 @app.route("/memory/clear", methods=["POST"])
 def clear_memory():
     if 'username' not in session:
@@ -1461,7 +1425,7 @@ HTML_TEMPLATE = r"""
         .auth-tab.active { background: rgba(255,255,255,0.1); color: #fff; }
         .auth-input { width: 100%; background: rgba(255,255,255,0.05); border: 1px solid var(--lg-border-soft); border-radius: 12px; padding: 12px 16px; color: white; font-size: 14px; margin-bottom: 14px; outline: none; transition: 0.2s; }
         .auth-input:focus { border-color: var(--accent1); box-shadow: 0 0 0 3px rgba(59,130,246,0.2); }
-        .auth-label { font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 6px; margin-bottom: 6px; margin-top: 4px; }
+        .auth-label { font-size: 11px; color: var(--text-muted); display: block; margin-bottom: 6px; margin-top: 4px; }
         .lang-select { width: 100%; background: rgba(255,255,255,0.05); border: 1px solid var(--lg-border-soft); border-radius: 12px; padding: 12px 16px; color: white; font-size: 14px; margin-bottom: 14px; outline: none; cursor: pointer; }
         .lang-select option { background: #0f172a; color: #fff; padding: 8px; }
         .auth-btn { width: 100%; background: var(--primary-gradient); color: white; border: none; padding: 12px; border-radius: 12px; font-weight: 600; cursor: pointer; font-size: 14px; box-shadow: 0 4px 15px rgba(59,130,246,0.3); }
@@ -1513,7 +1477,7 @@ HTML_TEMPLATE = r"""
         .msg-img { max-width: 100%; border-radius: 10px; margin-top: 6px; display: block; }
         .msg-actions { position: absolute; top: 6px; right: 6px; opacity: 0; transition: 0.2s; display: flex; gap: 4px; z-index: 10; }
         .msg-bubble:hover .msg-actions { opacity: 1; }
-        .msg-action-btn { background: rgba(255,255,255,0.1); border: none; color: #fff; padding: 4px 6px; border-radius: 6px; font-size: 11px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+        .msg-action-btn { background: rgba(255,255,255,0.1); border: none; color: #fff; padding: 3px 6px; border-radius: 6px; font-size: 11px; cursor: pointer; }
         .typing-dots { display: inline-flex; gap: 3px; vertical-align: middle; }
         .typing-dots span { width: 6px; height: 6px; border-radius: 50%; background: #38BDF8; display: inline-block; animation: typingBounce 1.4s infinite ease-in-out both; }
         .typing-dots span:nth-child(1) { animation-delay: -0.32s; }
@@ -1571,12 +1535,12 @@ HTML_TEMPLATE = r"""
         .music-item .del-btn { background: rgba(239,68,68,0.15); border: 1px solid rgba(239,68,68,0.3); color: #F87171; padding: 4px 8px; border-radius: 8px; font-size: 10px; cursor: pointer; }
         .user-item { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 10px; margin-bottom: 6px; font-size: 12px; }
         .user-item .name { flex: 1; min-width: 0; color: #fff; }
-        .user-item .name small { color: var(--text-muted); font-size: 10px; display: flex; align-items: center; gap: 4px; margin-top: 2px; }
+        .user-item .name small { color: var(--text-muted); font-size: 10px; display: block; }
         .user-item .admin-badge { font-size: 9px; padding: 2px 6px; background: rgba(52,211,153,0.15); color: #34D399; border-radius: 6px; }
         .user-item .usr-btn { background: rgba(255,255,255,0.05); border: 1px solid var(--lg-border-soft); color: #fff; padding: 4px 8px; border-radius: 8px; font-size: 10px; cursor: pointer; }
         .user-item .usr-btn.danger { background: rgba(239,68,68,0.15); color: #F87171; border-color: rgba(239,68,68,0.3); }
         .toggle-row { display:flex; align-items:center; gap:10px; padding:10px; border-radius: 12px; margin-top: 4px; }
-        .toggle-row label { flex:1; font-size:12px; color:#fff; display:flex; align-items:center; gap:6px; }
+        .toggle-row label { flex:1; font-size:12px; color:#fff; }
         .toggle-row input[type="checkbox"] { width:20px; height:20px; accent-color:var(--accent1); cursor:pointer; }
         .toast { position: fixed; top: 20px; left: 50%; transform: translateX(-50%) translateY(-100px); color: #fff; padding: 14px 22px; border-radius: 16px; font-size: 14px; font-weight: 500; z-index: 9999; box-shadow: 0 10px 40px rgba(0,0,0,0.6); transition: transform 0.35s var(--tx-bounce), opacity 0.3s ease; max-width: 90vw; text-align: center; border: 1px solid var(--lg-border-soft); }
         .toast.show { transform: translateX(-50%) translateY(0); }
@@ -1586,7 +1550,7 @@ HTML_TEMPLATE = r"""
         .tab-btn { flex: 1; padding: 8px; text-align: center; font-size: 11px; font-weight: 600; color: var(--text-muted); cursor: pointer; border-radius: 8px; }
         .tab-btn.active { background: rgba(255,255,255,0.1) !important; color: #fff !important; }
         .loading-chats { text-align: center; padding: 20px; font-size: 11px; color: var(--text-muted); }
-        .inline-icon { display: inline-flex; vertical-align: middle; margin: 0 2px; }
+        .support-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; color: #38BDF8; background: rgba(56,189,248,0.08); border: 1px solid rgba(56,189,248,0.2); padding: 4px 8px; border-radius: 8px; margin: 2px; }
     </style>
 </head>
 <body>
@@ -1608,10 +1572,7 @@ HTML_TEMPLATE = r"""
             </div>
             <div id="emailFieldContainer" style="display: none;">
                 <input type="email" id="authEmail" class="auth-input" placeholder="E-Posta Adresi">
-                <label class="auth-label">
-                    <i data-lucide="bot" width="13" height="13" style="color: var(--accent1);"></i>
-                    Botun sana hangi dilde yanıt vermesini istersin?
-                </label>
+                <label class="auth-label">🤖 Botun sana hangi dilde yanıt vermesini istersin?</label>
                 <select id="authLanguage" class="lang-select">
                     {% for code, name in supported_languages.items() %}
                     <option value="{{ code }}" {% if code == 'tr' %}selected{% endif %}>
@@ -1650,10 +1611,7 @@ HTML_TEMPLATE = r"""
             </select>
 
             <div class="toggle-row" style="margin-top: 10px;">
-                <label>
-                    <i data-lucide="brain" width="14" height="14" style="color: var(--accent1);"></i>
-                    Bot Hafızasını Temizle (Önceki sohbeti unutur)
-                </label>
+                <label>🧠 Bot Hafızasını Temizle (Önceki sohbeti unutur)</label>
                 <button class="auth-btn" style="width:auto; padding:8px 14px; font-size:12px; background: rgba(239,68,68,0.15); color: #F87171; border: 1px solid rgba(239,68,68,0.3);" onclick="clearBotMemory()">Temizle</button>
             </div>
 
@@ -1860,28 +1818,11 @@ HTML_TEMPLATE = r"""
             <div class="chat-container" id="chatBox">
                 <div class="msg-bubble user">
                     <b>Sistem</b>
-                    <div style="display: flex; align-items: flex-start; gap: 8px; margin-top: 6px;">
-                        <i data-lucide="sparkles" width="16" height="16" style="color: var(--accent1); flex-shrink: 0; margin-top: 2px;"></i>
-                        <span>Sistem hazır!</span>
-                    </div>
-                    <div style="margin-top: 10px; display: flex; flex-direction: column; gap: 6px;">
-                        <div style="display: flex; align-items: flex-start; gap: 8px;">
-                            <i data-lucide="brain" width="14" height="14" style="color: #38BDF8; flex-shrink: 0; margin-top: 2px;"></i>
-                            <span><b style="display: inline; font-size: inherit; opacity: 1;">Hafıza aktif</b>: Önceki mesajları hatırlıyorum, "İngilizce konuş" dediğinde dil değişmiyor.</span>
-                        </div>
-                        <div style="display: flex; align-items: flex-start; gap: 8px;">
-                            <i data-lucide="share-2" width="14" height="14" style="color: #38BDF8; flex-shrink: 0; margin-top: 2px;"></i>
-                            <span><b style="display: inline; font-size: inherit; opacity: 1;">Sosyal medya desteği</b>: TikTok, Instagram, Twitter/X, YouTube, Reddit, GitHub, Spotify linklerini atabilirsin.</span>
-                        </div>
-                        <div style="display: flex; align-items: flex-start; gap: 8px;">
-                            <i data-lucide="globe" width="14" height="14" style="color: #38BDF8; flex-shrink: 0; margin-top: 2px;"></i>
-                            <span><b style="display: inline; font-size: inherit; opacity: 1;">Dil seçimi</b>: Profil ayarlarından dilini değiştirebilirsin.</span>
-                        </div>
-                        <div style="display: flex; align-items: flex-start; gap: 8px;">
-                            <i data-lucide="search" width="14" height="14" style="color: #38BDF8; flex-shrink: 0; margin-top: 2px;"></i>
-                            <span><b style="display: inline; font-size: inherit; opacity: 1;">Web arama</b>: "araştır" dediğinde web'de arama yapıyorum.</span>
-                        </div>
-                    </div>
+                    Sistem hazır! 🎉<br><br>
+                    ✅ <b>Hafıza aktif</b>: Önceki mesajları hatırlıyorum, "İngilizce konuş" dediğinde dil değişmiyor.<br>
+                    ✅ <b>Sosyal medya desteği</b>: TikTok, Instagram, Twitter/X, YouTube, Reddit, GitHub, Spotify linklerini atabilirsin.<br>
+                    ✅ <b>Dil seçimi</b>: Profil ayarlarından dilini değiştirebilirsin.<br>
+                    ✅ <b>Web arama</b>: "araştır" dediğinde web'de arama yapıyorum.
                 </div>
             </div>
             <div id="imagePreviewContainer" style="padding: 0 16px; display: none;">
@@ -2438,7 +2379,7 @@ HTML_TEMPLATE = r"""
                 if (data.status === 'success') {
                     c.innerHTML = '';
                     data.users.forEach(u => {
-                        c.innerHTML += `<div class="user-item"><i data-lucide="user" width="16" height="16" style="color: var(--accent1);"></i><div class="name">${u.username}<small>${u.email || 'e-posta yok'} &bull; <i data-lucide="globe" width="10" height="10"></i> ${u.language}</small></div>${u.is_admin ? '<span class="admin-badge">ADMIN</span>' : ''}<button class="usr-btn" onclick="toggleAdmin(${u.id})">${u.is_admin ? 'Admin Kaldır' : 'Admin Yap'}</button><button class="usr-btn danger" onclick="deleteUser(${u.id})">Sil</button></div>`;
+                        c.innerHTML += `<div class="user-item"><i data-lucide="user" width="16" height="16" style="color: var(--accent1);"></i><div class="name">${u.username}<small>${u.email || 'e-posta yok'} • 🌐 ${u.language}</small></div>${u.is_admin ? '<span class="admin-badge">ADMIN</span>' : ''}<button class="usr-btn" onclick="toggleAdmin(${u.id})">${u.is_admin ? 'Admin Kaldır' : 'Admin Yap'}</button><button class="usr-btn danger" onclick="deleteUser(${u.id})">Sil</button></div>`;
                     });
                     lucide.createIcons();
                 }
@@ -2615,9 +2556,9 @@ HTML_TEMPLATE = r"""
             chats[activeChatIndex].messages.forEach((m, idx) => {
                 let imgHtml = m.image ? `<img src="${m.image}" class="msg-img">` : '';
                 let actions = `<div class="msg-actions">
-                    ${m.sender === 'bot' ? `<button class="msg-action-btn" onclick="speakText(${idx})" title="Sesli Oku"><i data-lucide="volume-2" width="12" height="12"></i></button>` : ''}
-                    <button class="msg-action-btn" onclick="copyMsg(${idx})" title="Kopyala"><i data-lucide="copy" width="12" height="12"></i></button>
-                    <button class="msg-action-btn" onclick="deleteMsg(${idx})" title="Sil"><i data-lucide="trash-2" width="12" height="12"></i></button>
+                    ${m.sender === 'bot' ? `<button class="msg-action-btn" onclick="speakText(${idx})" title="Sesli Oku">🔊</button>` : ''}
+                    <button class="msg-action-btn" onclick="copyMsg(${idx})" title="Kopyala">Kopyala</button>
+                    <button class="msg-action-btn" onclick="deleteMsg(${idx})" title="Sil">Sil</button>
                 </div>`;
                 const isNew = (!isInitialLoad && idx === animatingMessageIndex);
                 const newClass = isNew ? ' msg-new' : '';
@@ -2751,4 +2692,4 @@ HTML_TEMPLATE = r"""
 """
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)/
+    app.run(host="0.0.0.0", port=5000, debug=True)	

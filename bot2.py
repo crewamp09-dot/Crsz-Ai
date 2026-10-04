@@ -120,53 +120,7 @@ def init_db():
     )""")
     conn.commit()
 
-    # ============ MIGRATION: Eski tablolara eksik kolonları ekle ============
-    def column_exists(table, column):
-        try:
-            c.execute(f"PRAGMA table_info({table})")
-            cols = [row[1] for row in c.fetchall()]
-            return column in cols
-        except Exception:
-            return False
-
-    # users tablosuna language kolonu ekle (eski DB'de yoksa)
-    if not column_exists("users", "language"):
-        try:
-            c.execute("ALTER TABLE users ADD COLUMN language TEXT DEFAULT 'tr'")
-            conn.commit()
-            print("[DB MIGRATION] users tablosuna 'language' kolonu eklendi.")
-        except Exception as e:
-            print(f"[DB MIGRATION HATA] language: {e}")
-
-    # users tablosuna is_admin kolonu ekle
-    if not column_exists("users", "is_admin"):
-        try:
-            c.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0")
-            conn.commit()
-            print("[DB MIGRATION] users tablosuna 'is_admin' kolonu eklendi.")
-        except Exception as e:
-            print(f"[DB MIGRATION HATA] is_admin: {e}")
-
-    # users tablosuna avatar kolonu ekle
-    if not column_exists("users", "avatar"):
-        try:
-            c.execute("ALTER TABLE users ADD COLUMN avatar TEXT")
-            conn.commit()
-            print("[DB MIGRATION] users tablosuna 'avatar' kolonu eklendi.")
-        except Exception as e:
-            print(f"[DB MIGRATION HATA] avatar: {e}")
-
-    # users tablosuna email kolonu ekle
-    if not column_exists("users", "email"):
-        try:
-            c.execute("ALTER TABLE users ADD COLUMN email TEXT")
-            conn.commit()
-            print("[DB MIGRATION] users tablosuna 'email' kolonu eklendi.")
-        except Exception as e:
-            print(f"[DB MIGRATION HATA] email: {e}")
-
-    # ============ ADMİN HESAPLARI ============
-    # crewampfilms admin hesabı (yoksa oluştur, varsa admin yap)
+    # crewampfilms admin hesabını oluştur (yoksa)
     c.execute("SELECT COUNT(*) FROM users WHERE username = ?", ("crewampfilms",))
     if c.fetchone()[0] == 0:
         hashed = generate_password_hash("123")
@@ -175,11 +129,11 @@ def init_db():
         conn.commit()
         print("[DB] Admin oluşturuldu: crewampfilms / 123")
     else:
+        # Varsa admin yetkisini garantile
         c.execute("UPDATE users SET is_admin = 1 WHERE username = ?", ("crewampfilms",))
         conn.commit()
-        print("[DB] Admin yetkisi garanti edildi: crewampfilms")
 
-    # crew kullanıcısı da admin olsun
+    # crew kullanıcısını da garanti et (admin)
     c.execute("SELECT COUNT(*) FROM users WHERE username = ?", ("crew",))
     if c.fetchone()[0] == 0:
         hashed2 = generate_password_hash("123")
@@ -187,10 +141,6 @@ def init_db():
                   ("crew", "", hashed2))
         conn.commit()
         print("[DB] Admin oluşturuldu: crew / 123")
-    else:
-        c.execute("UPDATE users SET is_admin = 1 WHERE username = ?", ("crew",))
-        conn.commit()
-
     conn.close()
 
 
@@ -2751,4 +2701,4 @@ HTML_TEMPLATE = r"""
 """
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)/
+    app.run(host="0.0.0.0", port=5000, debug=True)
