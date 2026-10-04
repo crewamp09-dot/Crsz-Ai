@@ -129,7 +129,6 @@ def init_db():
         except Exception:
             return False
 
-    # users tablosuna language kolonu ekle (eski DB'de yoksa)
     if not column_exists("users", "language"):
         try:
             c.execute("ALTER TABLE users ADD COLUMN language TEXT DEFAULT 'tr'")
@@ -138,7 +137,6 @@ def init_db():
         except Exception as e:
             print(f"[DB MIGRATION HATA] language: {e}")
 
-    # users tablosuna is_admin kolonu ekle
     if not column_exists("users", "is_admin"):
         try:
             c.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0")
@@ -147,7 +145,6 @@ def init_db():
         except Exception as e:
             print(f"[DB MIGRATION HATA] is_admin: {e}")
 
-    # users tablosuna avatar kolonu ekle
     if not column_exists("users", "avatar"):
         try:
             c.execute("ALTER TABLE users ADD COLUMN avatar TEXT")
@@ -156,7 +153,6 @@ def init_db():
         except Exception as e:
             print(f"[DB MIGRATION HATA] avatar: {e}")
 
-    # users tablosuna email kolonu ekle
     if not column_exists("users", "email"):
         try:
             c.execute("ALTER TABLE users ADD COLUMN email TEXT")
@@ -166,7 +162,6 @@ def init_db():
             print(f"[DB MIGRATION HATA] email: {e}")
 
     # ============ ADMİN HESAPLARI ============
-    # crewampfilms admin hesabı (yoksa oluştur, varsa admin yap)
     c.execute("SELECT COUNT(*) FROM users WHERE username = ?", ("crewampfilms",))
     if c.fetchone()[0] == 0:
         hashed = generate_password_hash("123")
@@ -179,7 +174,6 @@ def init_db():
         conn.commit()
         print("[DB] Admin yetkisi garanti edildi: crewampfilms")
 
-    # crew kullanıcısı da admin olsun
     c.execute("SELECT COUNT(*) FROM users WHERE username = ?", ("crew",))
     if c.fetchone()[0] == 0:
         hashed2 = generate_password_hash("123")
@@ -2751,4 +2745,5 @@ HTML_TEMPLATE = r"""
 """
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)/
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)
